@@ -294,3 +294,7 @@ h2.sec.acc { margin: 14px 8px 6px; font-size: 16px; }
 .bridge { padding: 48px 24px; text-align: center; }
 .bridge h1 { margin: 0 0 10px; font-size: 24px; }
 .bridge p { margin: 0; color: var(--text-2); line-height: 1.5; }
+.pc-on { font-size: 11px; font-weight: 700; color: var(--accent-ink); background: var(--accent); border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: 1px; }
+.pc-addr { background: var(--surface-2); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; font: inherit; font-size: 12px; padding: 2px 4px; }
+.pc-steps { margin: 0; padding-left: 18px; font-size: 13px; color: var(--text-2); line-height: 1.5; }
+.pc-steps li { margin-bottom: 6px; }

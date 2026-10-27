@@ -1,9 +1,16 @@
 // Reads secrets from config.local.json (git-ignored) or environment variables.
+// Run from the project, everything lives in the project folder. Run as the packaged PC helper
+// (StreamingTracker-PC.exe), data and config live in %AppData%\StreamingTracker instead.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const ROOT = path.join(__dirname, '..');
-const FILE = path.join(ROOT, 'config.local.json');
+const PACKAGED = (() => { try { return require('node:sea').isSea(); } catch (e) { return false; } })();
+const ROOT = PACKAGED ? null : path.join(__dirname, '..');
+const DATA = PACKAGED
+  ? path.join(process.env.APPDATA || path.join(os.homedir(), '.config'), 'StreamingTracker')
+  : path.join(ROOT, 'data');
+const FILE = PACKAGED ? path.join(DATA, 'config.local.json') : path.join(ROOT, 'config.local.json');
 
 function load() {
   let local = {};
@@ -17,8 +24,8 @@ function load() {
     tmdbApiKey: process.env.TMDB_API_KEY || local.tmdbApiKey || '',
     omdbKey: process.env.OMDB_KEY || local.omdbKey || '',
     region: local.region || 'US',
-    dataDir: path.join(ROOT, 'data')
+    dataDir: DATA
   };
 }
 
-module.exports = { load, ROOT };
+module.exports = { load, ROOT, PACKAGED, CONFIG_FILE: FILE };

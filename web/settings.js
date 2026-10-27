@@ -5,9 +5,62 @@
 // you back to the app with the result.
 // Uses the shared helpers in app.js (api, esc, renderNav, openSheet, toast, state…), loaded after this file.
 
+const HELPER_DOWNLOAD = 'https://github.com/collinrandolph/streamingapp/releases/download/pc-helper/StreamingTracker-PC.exe';
+
+// ---------- Your PCs ----------
+// The app keeps a list of PCs (added by scanning a PC helper's QR code) and uses one at a time.
+// Each: { id, name, port, addrs: [every address the PC reported], addr: the one in use, ver, seenAt }.
+
+function pcList() {
+  return state.core ? state.core.settings().pcs || [] : [];
+}
+function activePc() {
+  const s = state.core ? state.core.settings() : {};
+  return (s.pcs || []).find((p) => p.id === s.activePc) || null;
+}
 function pcUrl() {
-  const u = state.core ? state.core.settings().pcUrl : '';
+  const p = activePc();
+  if (p) return `http://${p.addr}:${p.port}`;
+  const u = state.core ? state.core.settings().pcUrl : ''; // an address typed in before PCs had a list
   return u ? u.replace(/\/+$/, '') : '';
+}
+
+// Adds a PC or refreshes one the app already knows (same ID), and makes it the one in use.
+function rememberPc(info) {
+  const pcs = pcList().filter((p) => p.id !== info.id);
+  const old = pcList().find((p) => p.id === info.id);
+  const addrs = (info.addrs || []).filter((a) => /^[\d.]+$/.test(a));
+  const addr = old && addrs.includes(old.addr) ? old.addr : addrs[0];
+  const pc = { id: String(info.id), name: String(info.name || 'PC').slice(0, 60), port: Number(info.port) || 8787, addrs, addr, ver: info.ver || info.version || '', seenAt: Date.now() };
+  state.core.saveSettings({ pcs: [pc, ...pcs], activePc: pc.id });
+  return pc;
+}
+
+// #/pair?d=…, opened by scanning a PC helper's QR code.
+function screenPair() {
+  renderNav(null, false);
+  let pc;
+  try {
+    const d = new URLSearchParams(location.hash.split('?')[1] || '').get('d') || '';
+    const info = JSON.parse(decodeURIComponent(escape(atob(d.replace(/-/g, '+').replace(/_/g, '/')))));
+    if (info.v !== 1 || !info.id || !Array.isArray(info.addrs) || !info.addrs.length) throw new Error('bad');
+    pc = rememberPc(info);
+  } catch (e) {
+    $view.innerHTML = `<div class="bridge"><h1>That QR code didn't work</h1><p>Open the Connect page in the PC helper and scan it again.</p><p style="margin-top:18px"><a href="#/watching">Back to the app</a></p></div>`;
+    return;
+  }
+  // Clear the link's data out of history; the PC is saved.
+  history.replaceState(null, '', location.href.split('#')[0] + '#/pair-done');
+  const empty = state.core.isEmpty();
+  $view.innerHTML = `<div class="bridge">
+    <h1>Connected to ${esc(pc.name)}</h1>
+    <p>Watch on TV and the remote now go through this PC at ${esc(pc.addr)}. It needs to be on, with the helper running, and your phone on the same Wi-Fi.</p>
+    <div class="stack" style="margin:22px auto 0;max-width:320px">
+      <button class="${empty ? 'btn-primary' : 'btn-secondary'}" data-act="set-import-pc">Copy my list from this PC</button>
+      <a class="${empty ? 'btn-secondary' : 'btn-primary'}" style="display:flex;align-items:center;justify-content:center" href="#/watching">${empty ? 'Skip' : 'Done'}</a>
+    </div>
+    ${pc.addrs.length > 1 ? `<p class="hint" style="margin-top:16px">This PC has ${pc.addrs.length} addresses. If Watch on TV can't reach it, pick another in Settings.</p>` : ''}
+  </div>`;
 }
 
 // ---------- Talking to the PC from the hosted app ----------
@@ -108,16 +161,8 @@ async function screenSettings(rid) {
       <p class="hint" style="margin:10px 0 0">Get a TMDb token free at themoviedb.org › Settings › API. Opening the app once from your PC's address copies the PC's keys here.</p>
     </div></div>
 
-    <h2 class="sec" style="font-size:16px">Your PC</h2>
-    <div class="pad"><div class="panel" style="padding:14px">
-      ${state.pc ? '<p class="hint" style="margin:0 0 10px">You opened the app from your PC, so Watch on TV and the remote work directly.</p>' : ''}
-      ${field('set-pc', 'PC address', s.pcUrl, { placeholder: 'http://192.168.0.104:8787', mb: 14 })}
-      <div class="stack">
-        <button class="btn-secondary" data-act="set-save-pc">Save address</button>
-        ${!state.pc && s.pcUrl ? '<button class="btn-secondary" data-act="set-import-pc">Copy my list from the PC</button>' : ''}
-      </div>
-      <p class="hint" style="margin:10px 0 0">Needed for Watch on TV and the remote. They open a page on your PC for a moment, so the PC must be on and on the same Wi-Fi.</p>
-    </div></div>
+    <h2 class="sec" style="font-size:16px">Your PCs</h2>
+    ${pcsHtml()}
 
     <h2 class="sec" style="font-size:16px">Backup</h2>
     <div class="pad"><div class="panel" style="padding:14px">
@@ -128,6 +173,35 @@ async function screenSettings(rid) {
       <p class="hint" style="margin:10px 0 0">A backup holds your services, My List, places in shows, follows and saved searches. Restoring replaces what's on this device.</p>
     </div></div>
     <p class="attrib">This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
+}
+
+// The PC list: which one is in use, its address, and how to add another.
+function pcsHtml() {
+  const pcs = pcList();
+  const active = activePc();
+  const legacy = !pcs.length && state.core.settings().pcUrl;
+  const rows = pcs.map((p) => `<div class="item" style="flex-wrap:wrap">
+      <span class="l"><span class="t">${esc(p.name)}${p.id === (active && active.id) ? ' <span class="pc-on">In use</span>' : ''}</span>
+        <span class="s">${p.addrs.length > 1
+          ? `<select class="pc-addr" data-pc="${esc(p.id)}" aria-label="Address for ${esc(p.name)}">${p.addrs.map((a) => `<option ${a === p.addr ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>:${p.port}`
+          : `${esc(p.addr)}:${p.port}`}${p.ver ? ' · helper ' + esc(p.ver) : ''}</span></span>
+      <span style="display:flex;gap:4px">${p.id === (active && active.id) ? '' : `<button class="chip" data-act="set-pc-use" data-pc="${esc(p.id)}">Use</button>`}<button class="link-btn" data-act="set-pc-forget" data-pc="${esc(p.id)}" data-name="${esc(p.name)}">Forget</button></span>
+    </div>`).join('');
+  return `<div class="pad"><div class="panel">
+      ${rows || (legacy ? `<div class="item"><span class="l"><span class="t">PC at ${esc(legacy.replace(/^https?:\/\//, ''))}</span><span class="s">Added by address. Scan its QR code to name it and keep it up to date.</span></span></div>` : '<div class="item"><span class="l"><span class="t">No PC yet</span><span class="s">Watch on TV and the remote work through a PC running the helper.</span></span></div>')}
+    </div>
+    ${active || legacy ? `<div class="stack" style="margin-top:10px">${state.pc ? '' : '<button class="btn-secondary" data-act="set-import-pc">Copy my list from the PC in use</button>'}</div>` : ''}
+    <div class="panel" style="padding:14px;margin-top:10px">
+      <p style="margin:0 0 8px;font-weight:600">Add a PC</p>
+      <ol class="pc-steps">
+        <li>On the PC, <a href="${HELPER_DOWNLOAD}">download the PC helper</a> (StreamingTracker-PC.exe) and run it. Windows may warn that it's from an unknown publisher: choose More info › Run anyway.</li>
+        <li>It opens a Connect page with a QR code. Scan it with your phone's camera.</li>
+      </ol>
+      <details style="margin-top:8px"><summary class="hint" style="margin:0;cursor:pointer">Or enter an address</summary>
+        <div style="margin-top:10px">${'<label class="lbl" for="set-pc">PC address</label><input id="set-pc" class="search" type="text" autocomplete="off" placeholder="192.168.0.104:8787" style="margin-bottom:10px">'}
+        <button class="btn-secondary" data-act="set-save-pc">Use this address</button></div>
+      </details>
+    </div></div>`;
 }
 
 async function importBackup(data, label) {
@@ -149,11 +223,23 @@ document.addEventListener('click', async (ev) => {
       return toast('Keys saved');
     }
     if (act === 'set-save-pc') {
-      let v = document.getElementById('set-pc').value.trim().replace(/\/+$/, '');
-      if (v && !/^https?:\/\//.test(v)) v = 'http://' + v;
-      if (v && !/:\d+$/.test(v.replace(/^https?:\/\//, ''))) v += ':8787';
-      state.core.saveSettings({ pcUrl: v });
-      toast(v ? 'PC address saved' : 'PC address removed');
+      // Typed in by hand: becomes a list entry named after its address until its QR code is scanned.
+      const m = document.getElementById('set-pc').value.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '').match(/^([\d.]+)(?::(\d+))?$/);
+      if (!m) return toast('Enter an address like 192.168.0.104:8787');
+      rememberPc({ id: 'addr-' + m[1], name: 'PC at ' + m[1], port: Number(m[2]) || 8787, addrs: [m[1]] });
+      toast('PC address saved');
+      return route();
+    }
+    if (act === 'set-pc-use') {
+      state.core.saveSettings({ activePc: el.dataset.pc });
+      toast('Using ' + (activePc() || {}).name);
+      return route();
+    }
+    if (act === 'set-pc-forget') {
+      if (!confirm(`Forget ${el.dataset.name}?`)) return;
+      const rest = pcList().filter((p) => p.id !== el.dataset.pc);
+      const s = state.core.settings();
+      state.core.saveSettings({ pcs: rest, activePc: s.activePc === el.dataset.pc ? (rest[0] && rest[0].id) || null : s.activePc });
       return route();
     }
     if (act === 'set-import-pc') {
@@ -174,6 +260,13 @@ document.addEventListener('click', async (ev) => {
   } catch (e) {
     toast(e.message);
   }
+});
+
+document.addEventListener('change', (ev) => {
+  const sel = ev.target.closest('.pc-addr');
+  if (!sel) return;
+  state.core.saveSettings({ pcs: pcList().map((p) => (p.id === sel.dataset.pc ? { ...p, addr: sel.value } : p)) });
+  toast('Address updated');
 });
 
 document.addEventListener('change', async (ev) => {

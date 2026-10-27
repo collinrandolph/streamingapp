@@ -591,6 +591,7 @@ async function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   try {
     // The PC helper page and Settings work before anything else is set up.
+    if ((parts[0] || '').startsWith('pair?')) return screenPair();
     if ((parts[0] || '').startsWith('bridge-done')) return await screenBridgeDone();
     if ((parts[0] || '').startsWith('bridge')) return await screenBridge();
     if (parts[0] === 'settings') return await screenSettings(rid);
@@ -620,6 +621,7 @@ async function route() {
     if (p0 === 'good' && p1 === 'step' && p2) return await screenGoodStep(rid, p2);
     if (p0 === 'good' && p1 === 'results') return await screenGoodResults(rid);
     if (p0 === 'good') { goodStart(); return; }
+    if (p0 === 'pair-done') { location.replace('#/watching'); return; }
     if (p0 === 'remote' && !state.pc) return screenRemoteElsewhere();
     if (p0 === 'remote' && p1 === 'calibrate') return await screenCalibrate(rid);
     if (p0 === 'remote') return await screenRemote(rid);
@@ -881,6 +883,7 @@ async function startApp() {
     ]);
     state.core = core;
     state.pc = !!(ping && ping.pc);
+    state.pcInfo = state.pc ? ping : null;
     if (state.pc && core) await adoptPc();
     // Offline support needs a secure address (the hosted app, or localhost); the PC's http address can't have it.
     if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -897,7 +900,9 @@ async function startApp() {
 async function adoptPc() {
   const core = state.core;
   const set = core.settings();
-  const patch = { pcUrl: location.origin };
+  // Opened from a PC: it goes on the PC list (or is refreshed there) and becomes the one in use.
+  if (state.pcInfo && state.pcInfo.id) rememberPc(state.pcInfo);
+  const patch = {};
   if (!set.tmdbToken) {
     const keys = await pcApi('/keys').catch(() => null);
     if (keys) Object.assign(patch, { tmdbToken: keys.tmdbToken || '', omdbKey: keys.omdbKey || set.omdbKey || '' });

@@ -1,13 +1,16 @@
-// HTTP server: serves the phone web app from web/ and the JSON API under /api.
+// HTTP server: the PC helper. Serves the web app (web/), the shared data code (/core/), the Connect page
+// with the QR code (/connect), and the PC-only API: the Roku, your list for copying to the phone, the keys.
+// Packaged as StreamingTracker-PC.exe it opens the Connect page on start (unless started with --background).
 const http = require('http');
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { exec } = require('child_process');
 const api = require('./api');
 const config = require('./config');
+const assets = require('./assets');
+const pc = require('./pc');
 
 const PORT = Number(process.env.PORT) || 8787;
-const WEB = path.join(__dirname, '..', 'web');
+const BACKGROUND = process.argv.includes('--background');
 // The data code the browser runs too; served at /core/ (GitHub Pages gets the same files there).
 const CORE_FILES = ['api.js', 'tmdb.js', 'tracking.js', 'good.js', 'wikidata.js', 'schema.js'];
 const TYPES = {
@@ -24,6 +27,11 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+function sendFile(res, name, buf) {
+  res.writeHead(200, { 'content-type': TYPES[path.extname(name)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+  res.end(buf);
+}
+
 function readJson(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -35,26 +43,24 @@ function readJson(req) {
 
 function serveStatic(res, pathname) {
   const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
-  const file = path.normalize(path.join(WEB, rel));
-  if (!file.startsWith(WEB)) { res.writeHead(403); return res.end(); }
-  fs.readFile(file, (err, buf) => {
-    if (err) {
-      // Unknown paths fall back to the app shell.
-      return fs.readFile(path.join(WEB, 'index.html'), (e2, html) => {
-        if (e2) { res.writeHead(404); return res.end('Not found'); }
-        res.writeHead(200, { 'content-type': TYPES['.html'] });
-        res.end(html);
-      });
-    }
-    res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
-    res.end(buf);
-  });
+  const buf = assets.read('web/' + rel);
+  if (buf) return sendFile(res, rel, buf);
+  // Unknown paths fall back to the app shell.
+  const html = assets.read('web/index.html');
+  if (!html) { res.writeHead(404); return res.end('Not found'); }
+  sendFile(res, 'index.html', html);
 }
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  // Lets a page tell it was served by the PC, which can reach the Roku.
-  if (url.pathname === '/api/ping') return sendJson(res, 200, { pc: true });
+  // Who this PC is and how to reach it; also lets a page tell it was served by the PC.
+  if (url.pathname === '/api/ping') return sendJson(res, 200, pc.info(PORT));
+  // The Connect page and its data: the QR link and the start-with-Windows switch.
+  if (url.pathname === '/connect') return sendFile(res, 'connect.html', assets.read('connect.html'));
+  if (url.pathname === '/api/connect') return sendJson(res, 200, { ...pc.info(PORT), link: pc.pairLink(PORT), app: pc.APP_URL, startup: pc.startup(), hasKey: !!config.load().tmdbToken });
+  if (url.pathname === '/api/startup' && req.method === 'POST') {
+    try { return sendJson(res, 200, pc.setStartup(!!(await readJson(req)).on)); } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
+  }
   // The app keeps its own copy of the keys; opened from the PC, it takes them from config.local.json.
   if (url.pathname === '/api/keys') {
     const c = config.load();
@@ -62,11 +68,9 @@ const server = http.createServer(async (req, res) => {
   }
   const core = url.pathname.match(/^\/core\/([a-z]+\.js)$/);
   if (core && CORE_FILES.includes(core[1])) {
-    return fs.readFile(path.join(__dirname, core[1]), (err, buf) => {
-      if (err) { res.writeHead(404); return res.end(); }
-      res.writeHead(200, { 'content-type': TYPES['.js'], 'cache-control': 'no-cache' });
-      res.end(buf);
-    });
+    const buf = assets.read('core/' + core[1]);
+    if (!buf) { res.writeHead(404); return res.end(); }
+    return sendFile(res, core[1], buf);
   }
   if (url.pathname.startsWith('/api/')) {
     try {
@@ -81,12 +85,26 @@ const server = http.createServer(async (req, res) => {
   serveStatic(res, url.pathname);
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('Streaming tracker running:');
-  console.log('  This PC:   http://localhost:' + PORT);
-  for (const list of Object.values(os.networkInterfaces())) {
-    for (const n of list || []) {
-      if (n.family === 'IPv4' && !n.internal) console.log('  Your phone: http://' + n.address + ':' + PORT);
-    }
+function openConnectPage() {
+  if (process.platform === 'win32') exec(`start "" "http://localhost:${PORT}/connect"`);
+}
+
+server.on('error', (e) => {
+  // Already running (say, started with Windows): just show its Connect page and step aside.
+  if (e.code === 'EADDRINUSE') {
+    console.log('The PC helper is already running on port ' + PORT + '.');
+    if (config.PACKAGED && !BACKGROUND) openConnectPage();
+    setTimeout(() => process.exit(0), 1500);
+    return;
   }
+  throw e;
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  const i = pc.info(PORT);
+  console.log(`Streaming Tracker PC helper ${pc.VERSION} on ${i.name}`);
+  console.log('  Connect a phone: http://localhost:' + PORT + '/connect');
+  for (const a of i.addrs) console.log('  On your Wi-Fi:   http://' + a + ':' + PORT);
+  if (config.PACKAGED) console.log('  Data: ' + config.load().dataDir + '\n  Keep this window open while you use Watch on TV. Close it to stop the helper.');
+  if (config.PACKAGED && !BACKGROUND) openConnectPage();
 });

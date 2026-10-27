@@ -1,0 +1,36 @@
+# Builds the PC helper (StreamingTracker-PC.exe) and attaches it to the "pc-helper" release,
+# which the app's Settings links to. Runs when the helper's code changes, or by hand.
+name: Build PC helper
+
+on:
+  push:
+    branches: [main]
+    paths: ['server/**', 'web/**', 'tools/build-exe.js', '.github/workflows/pc-helper.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pc-helper
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build StreamingTracker-PC.exe
+        run: node tools/build-exe.js
+      - name: Publish to the pc-helper release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view pc-helper >/dev/null 2>&1; then
+            gh release create pc-helper --title "PC helper" --notes "StreamingTracker-PC.exe: the Windows PC helper for Watch on TV and the remote. Run it, then scan the QR code on its Connect page with your phone. Windows may warn that it's from an unknown publisher: choose More info, then Run anyway. Rebuilt automatically when the app changes; this release always has the latest build."
+          fi
+          gh release upload pc-helper dist/StreamingTracker-PC.exe --clobber
