@@ -65,12 +65,12 @@ function rowCard(t, line, extra) {
 const ICONS = {
   watching: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M10 8.5v5l4-2.5z"/><path d="M8 21h8"/></svg>',
   mylist: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>',
-  tracked: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>',
+  following: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>',
   services: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
   good: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
   search: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>'
 };
-const TABS = [['watching', 'Watching'], ['mylist', 'My List'], ['tracked', 'Tracked'], ['services', 'Services'], ['good', 'Good Stuff']];
+const TABS = [['watching', 'Watching'], ['mylist', 'My List'], ['following', 'Following'], ['services', 'Services'], ['good', 'Good Stuff']];
 
 function renderNav(current, show) {
   $nav.hidden = !show;
@@ -225,7 +225,7 @@ async function loadUpdates(rid, hasSeasons) {
     if (rid !== state.renderId) return;
     state.updates = {};
     if (!f.groups.length) {
-      box.innerHTML = hasSeasons ? '' : `<p class="empty">${f.hasRules ? 'Nothing new from what you track in the last 90 days.' : 'Track a title or follow a person, franchise or studio, and their new releases appear here. New seasons of shows you\'re caught up on show up here too.'}</p>`;
+      box.innerHTML = hasSeasons ? '' : `<p class="empty">${f.hasRules ? 'Nothing new from what you follow in the last 90 days.' : 'Follow a person, franchise or studio from its page, and their new releases appear here. New seasons of shows you\'re caught up on show up here too.'}</p>`;
       return;
     }
     box.innerHTML = f.groups.map((g) => `<h3 class="sub-sec">${esc(g.label)} <span class="count">${g.items.length}</span></h3><div class="pad">${g.items.map(updateRow).join('')}</div>`).join('');
@@ -294,36 +294,18 @@ async function screenServices(rid) {
     <p class="attrib">This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
 }
 
-async function screenTracked(rid) {
-  renderNav('tracked', true);
-  $view.innerHTML = header('Tracked') + '<p class="loading">Loading…</p>';
+// Following: the people, franchises and studios whose new titles come to Updates.
+async function screenFollowing(rid) {
+  renderNav('following', true);
+  $view.innerHTML = header('Following') + '<p class="loading">Loading…</p>';
   const d = await api('/tracked');
   if (rid !== state.renderId) return;
-  const followHref = (f) => `#/${f.type}/${f.id}`;
-  $view.innerHTML = header('Tracked') + `
-    <p class="hint">What feeds Updates on Watching. Open a title to change its rules.</p>
-    <h2 class="sec" style="font-size:16px">Titles <span class="count">${d.titles.length}</span></h2>
-    ${d.titles.length ? `<div class="pad">${d.titles.map((t) => `<a class="row-card" href="#/tracked/${t.kind}/${t.id}"><span class="thumb">${t.poster ? `<img src="${img(t.poster, 'w185')}" alt="" loading="lazy">` : ''}</span><span class="body"><span class="title">${esc(t.name)}</span><span class="line">${esc(t.line)}</span></span><span style="color:var(--accent);font-size:18px">›</span></a>`).join('')}</div>`
-      : '<p class="empty">No tracked titles yet. Open a title you loved and turn on Track.</p>'}
-    <h2 class="sec" style="font-size:16px">Following <span class="count">${d.follows.length}</span></h2>
-    ${d.follows.length ? `<div class="pad"><div class="panel">${d.follows.map((f) => `<a class="item" href="${followHref(f)}"><span style="display:flex;align-items:center;gap:12px;min-width:0">${f.image ? `<img src="${img(f.image, 'w92')}" alt="" style="width:36px;height:36px;border-radius:${f.type === 'person' ? '18px' : '6px'};object-fit:${f.type === 'studio' ? 'contain' : 'cover'};background:var(--surface-2);flex:none">` : ''}<span class="l"><span class="t">${esc(f.name)}</span><span class="s">${FOLLOW_KIND[f.type]}</span></span></span><span style="color:var(--accent);font-size:18px">›</span></a>`).join('')}</div></div>`
-      : '<p class="empty">Follow a person, franchise or studio from its page.</p>'}`;
-}
-
-async function screenTrackedTitle(rid, kind, id) {
-  renderNav('tracked', true);
-  $view.innerHTML = '<p class="loading">Loading…</p>';
-  const m = await api('/tracked/' + kind + '/' + id);
-  if (rid !== state.renderId) return;
-  $view.innerHTML = `<a class="back" href="#/tracked">‹ Tracked</a>
-    <div class="pad" style="display:flex;gap:14px;align-items:center;margin:4px 0 6px">
-      ${m.poster ? `<img src="${img(m.poster, 'w185')}" alt="" style="width:56px;border-radius:8px">` : ''}
-      <span><span style="display:block;font-size:22px;font-weight:700;line-height:1.2">${esc(m.name)}</span><a href="#/title/${m.kind}/${m.id}" style="font-size:13px">Open title page ›</a></span>
-    </div>
-    <p class="hint">Each rule's switch decides whether its new titles come to Updates. The posters are everything it covers, newest first.</p>
-    ${m.rules.map((r) => `<div class="rule panel"><button class="item" data-act="rule-toggle" data-kind="${m.kind}" data-id="${m.id}" data-type="${r.type}" data-target="${r.target}" role="switch" aria-checked="${r.enabled}"><span class="l"><span class="t">${esc(r.label)}</span><span class="s">${esc(r.role)}</span></span><span class="sw" aria-checked="${r.enabled}"></span></button></div>
-      <div class="hs rule-results">${r.results.length ? r.results.map((t) => card(t)).join('') : '<p class="empty" style="margin:0">No released titles.</p>'}</div>`).join('')}
-    <div class="pad" style="margin:18px 0"><button class="btn-secondary" data-act="track-stop" data-kind="${m.kind}" data-id="${m.id}">Stop tracking</button></div>`;
+  const groups = [['person', 'People'], ['collection', 'Franchises'], ['studio', 'Studios']]
+    .map(([type, label]) => [label, d.follows.filter((f) => f.type === type)]).filter(([, list]) => list.length);
+  const row = (f) => `<a class="item" href="#/${f.type}/${f.id}"><span style="display:flex;align-items:center;gap:12px;min-width:0">${f.image ? `<img src="${img(f.image, 'w92')}" alt="" style="width:40px;height:40px;border-radius:${f.type === 'person' ? '20px' : '6px'};object-fit:${f.type === 'studio' ? 'contain' : 'cover'};background:${f.type === 'studio' ? '#fff' : 'var(--surface-2)'};flex:none">` : ''}<span class="l"><span class="t">${esc(f.name)}</span><span class="s">${FOLLOW_KIND[f.type]}</span></span></span><span style="color:var(--accent);font-size:18px">›</span></a>`;
+  $view.innerHTML = header('Following') + `<p class="hint">New releases from everyone and everything here come to Updates on Watching. Open one to unfollow.</p>` +
+    (groups.length ? groups.map(([label, list]) => `<h2 class="sec" style="font-size:16px">${label} <span class="count">${list.length}</span></h2><div class="pad"><div class="panel">${list.map(row).join('')}</div></div>`).join('')
+      : '<p class="empty">Follow a person, franchise or studio from its page. Search finds them too.</p>');
 }
 
 async function screenSearch(rid) {
@@ -408,23 +390,24 @@ async function screenTitle(rid, kind, id) {
       <div class="pad"><div class="panel" id="episodes"><p class="loading" style="margin:14px">Loading episodes…</p></div></div>`;
   }
 
+  // Title, details and services sit on the header image; episodes come straight after the buttons.
   $view.innerHTML = `
     <div class="hero">${t.backdrop ? `<img src="${img(t.backdrop, 'w780')}" alt="">` : ''}<div class="shade"></div>
-      <button class="back-dot" data-act="back" aria-label="Back">‹</button></div>
-    <div class="t-head">
-      <h1>${esc(t.name)}</h1>
-      <p class="d">${esc(t.details)}${t.network ? ' · ' + esc(t.network) : ''}</p>
-      <div class="badges">${t.badges.map((b) => `<span class="badge ${b.logo ? '' : 'plain'} ${b.mine ? 'mine' : ''}">${b.logo ? `<img src="${img(b.logo, 'w45')}" alt="">` : ''}${esc(b.label)}</span>`).join('')}</div>
-      ${chips ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${chips}</div>` : ''}
-      ${ratingsTop ? ratingsHtml(t) : ''}
-    </div>
-    ${t.overview ? `<p class="overview clamp" data-act="expand">${esc(t.overview)}</p>` : ''}
+      <button class="back-dot" data-act="back" aria-label="Back">‹</button>
+      <div class="hero-text">
+        <h1>${esc(t.name)}</h1>
+        <p class="d">${esc(t.details)}${t.network ? ' · ' + esc(t.network) : ''}</p>
+        <div class="badges">${t.badges.map((b) => `<span class="badge ${b.logo ? '' : 'plain'} ${b.mine ? 'mine' : ''}">${b.logo ? `<img src="${img(b.logo, 'w45')}" alt="">` : ''}${esc(b.label)}</span>`).join('')}</div>
+      </div></div>
     <div class="pad" style="margin-top:14px">
       ${actions.main ? opButton(actions.main, opT, 'btn-secondary') : ''}
       ${actions.quiet.length ? `<div class="quiet-row">${actions.quiet.map((a) => opButton(a, opT, 'link-btn')).join('<span aria-hidden="true">·</span>')}</div>` : ''}
       <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Play on TV comes after the Roku launch test.</p>
     </div>
     ${nextHtml}
+    ${t.overview ? `<p class="overview clamp" data-act="expand" style="margin-top:18px">${esc(t.overview)}</p>` : ''}
+    ${chips ? `<div class="pad" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">${chips}</div>` : ''}
+    ${ratingsTop ? `<div class="pad">${ratingsHtml(t)}</div>` : ''}
     ${t.credits.length ? `<h2 class="sec" style="font-size:16px">Cast and crew</h2><div class="people">${t.credits.map((p) => `<a class="person" href="#/person/${p.id}"><span class="face">${p.photo ? `<img src="${img(p.photo, 'w185')}" alt="" loading="lazy">` : esc(initials(p.name))}</span><span class="n">${esc(p.name)}</span><span class="r">${esc(p.role)}</span></a>`).join('')}</div>` : ''}
     <h2 class="sec" style="font-size:16px">Where to watch</h2>
     <div class="pad">
@@ -534,8 +517,8 @@ async function route() {
     if (p0 === 'watching') return await screenWatching(rid);
     if (p0 === 'mylist') return await screenMyList(rid);
     if (p0 === 'services') return await screenServices(rid);
-    if (p0 === 'tracked' && p1 && p2) return await screenTrackedTitle(rid, p1, p2);
-    if (p0 === 'tracked') return await screenTracked(rid);
+    if (p0 === 'following') return await screenFollowing(rid);
+    if (p0 === 'tracked') { location.replace('#/following'); return; }
     if (p0 === 'good' && p1 === 'step' && p2) return await screenGoodStep(rid, p2);
     if (p0 === 'good' && p1 === 'results') return await screenGoodResults(rid);
     if (p0 === 'good') { goodStart(); return; }
@@ -569,13 +552,6 @@ document.addEventListener('click', async (ev) => {
       return;
     }
 
-    if (act === 'track-stop') {
-      const t = el.dataset.kind ? { kind: el.dataset.kind, id: el.dataset.id } : state.title;
-      await api('/track', { kind: t.kind, id: t.id, op: 'stop' });
-      toast('Stopped tracking');
-      if (location.hash.startsWith('#/tracked/')) { location.hash = '#/tracked'; return; }
-      return route();
-    }
     if (act === 'rule-toggle') {
       const on = el.getAttribute('aria-checked') !== 'true';
       await api('/rule', { kind: el.dataset.kind, id: el.dataset.id, type: el.dataset.type, target: el.dataset.target, enabled: on });

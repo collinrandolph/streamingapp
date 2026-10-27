@@ -118,9 +118,13 @@ label.lbl { display: block; font-size: 12px; font-weight: 600; color: var(--mute
 .footer-bar .skip { min-height: 52px; padding: 0 16px; font-weight: 600; color: var(--muted); }
 
 /* Title page */
-.hero { position: relative; aspect-ratio: 16 / 9; max-height: 260px; width: 100%; background: var(--surface-2); overflow: hidden; }
-.hero img { width: 100%; height: 100%; object-fit: cover; }
-.hero .shade { position: absolute; inset: 0; background: rgba(10, 11, 14, .45); }
+.hero { position: relative; aspect-ratio: 16 / 10; min-height: 250px; max-height: 340px; width: 100%; background: var(--surface-2); overflow: hidden; }
+.hero > img { width: 100%; height: 100%; object-fit: cover; }
+.hero .shade { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(10, 11, 14, .25) 0%, rgba(10, 11, 14, .1) 30%, rgba(15, 17, 21, .75) 65%, var(--bg) 100%); }
+.hero-text { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 16px 12px; }
+.hero-text h1 { margin: 0; font-size: 28px; line-height: 1.12; text-shadow: 0 1px 8px rgba(0, 0, 0, .6); }
+.hero-text .d { margin: 6px 0 8px; font-size: 13px; color: #D5D9E0; text-shadow: 0 1px 4px rgba(0, 0, 0, .7); }
+.hero-text .badges { margin: 0; }
 .hero .back-dot { position: absolute; top: calc(12px + env(safe-area-inset-top)); left: 12px; width: 44px; height: 44px; border-radius: 22px; background: rgba(15, 17, 21, .75); display: grid; place-items: center; font-size: 22px; font-weight: 600; }
 .t-head { padding: 14px 16px 0; }
 .t-head h1 { margin: 0; font-size: 26px; line-height: 1.15; }
@@ -234,3 +238,6 @@ h2.sec.acc { margin: 14px 8px 6px; font-size: 16px; }
 .acc-btn:hover { background: var(--surface); }
 .acc-btn .chev { color: var(--muted); font-size: 20px; transition: transform .15s; transform: rotate(90deg); }
 .acc-btn[aria-expanded="false"] .chev { transform: rotate(0deg); }
+.hero-text .badge { font-size: 11.5px; padding: 3px 9px 3px 3px; background: rgba(29, 33, 42, .85); }
+.hero-text .badge.mine { background: rgba(29, 42, 68, .9); }
+.hero-text .badge img { width: 18px; height: 18px; flex-basis: 18px; }
