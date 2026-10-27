@@ -247,3 +247,9 @@ h2.sec.acc { margin: 14px 8px 6px; font-size: 16px; }
 .view-btn:hover { color: var(--text); }
 .hero .trailer-btn { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; height: 44px; padding: 0 16px; border-radius: 22px; background: rgba(15, 17, 21, .75); color: var(--text); display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 700; }
 .hero .trailer-btn:hover { background: rgba(15, 17, 21, .9); }
+.title-row { display: flex; align-items: flex-end; gap: 10px; }
+.title-row h1 { flex: 1; min-width: 0; }
+.title-ops { display: flex; gap: 8px; flex: none; padding-bottom: 2px; }
+.op-icon { width: 40px; height: 40px; border-radius: 20px; background: rgba(15, 17, 21, .7); color: var(--text); display: grid; place-items: center; }
+.op-icon:hover { background: rgba(15, 17, 21, .9); }
+.op-icon[data-op="remove"]:hover { color: #FF8A8E; }

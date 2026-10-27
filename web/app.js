@@ -336,9 +336,16 @@ function statusActions(kind, status, pstate) {
   return { main: { op: 'allwatched', label: 'Mark all watched' }, quiet: [pause, remove] };
 }
 
-function opButton(a, t, cls) {
-  return `<button class="${cls}" data-act="lib-op" data-op="${a.op}" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}" data-poster="${esc(t.poster || '')}" data-year="${esc(t.year || '')}" data-place="${esc(t.place || '')}">${esc(a.label)}</button>`;
+// icon: draw the action as an icon (title-page header) instead of its label; the label becomes its accessible name.
+function opButton(a, t, cls, icon) {
+  const content = icon && OP_ICONS[a.op] ? OP_ICONS[a.op] : esc(a.label);
+  const named = icon ? ` aria-label="${esc(a.label)} ${esc(t.name)}" title="${esc(a.label)}"` : '';
+  return `<button class="${cls}" data-act="lib-op" data-op="${a.op}" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}" data-poster="${esc(t.poster || '')}" data-year="${esc(t.year || '')}" data-place="${esc(t.place || '')}"${named}>${content}</button>`;
 }
+const OP_ICONS = {
+  pause: '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+  remove: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>'
+};
 
 async function screenServices(rid) {
   renderNav('services', true);
@@ -452,13 +459,12 @@ async function screenTitle(rid, kind, id) {
       <button class="back-dot" data-act="back" aria-label="Back">‹</button>
       ${t.trailer ? `<a class="trailer-btn" href="${esc(t.trailer)}" target="_blank" rel="noopener" aria-label="Watch the ${esc(t.name)} trailer on YouTube"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>Trailer</a>` : ''}
       <div class="hero-text">
-        <h1>${esc(t.name)}</h1>
+        <div class="title-row"><h1>${esc(t.name)}</h1>${actions.quiet.length ? `<div class="title-ops">${actions.quiet.map((a) => opButton(a, opT, 'op-icon', true)).join('')}</div>` : ''}</div>
         <p class="d">${esc(t.details)}${t.network ? ' · ' + esc(t.network) : ''}</p>
         <div class="badges">${t.badges.map((b) => `<span class="badge ${b.logo ? '' : 'plain'} ${b.mine ? 'mine' : ''}">${b.logo ? `<img src="${img(b.logo, 'w45')}" alt="">` : ''}${esc(b.label)}</span>`).join('')}</div>
       </div></div>
     <div class="pad" style="margin-top:14px">
       ${actions.main ? opButton(actions.main, opT, 'btn-secondary') : ''}
-      ${actions.quiet.length ? `<div class="quiet-row">${actions.quiet.map((a) => opButton(a, opT, 'link-btn')).join('<span aria-hidden="true">·</span>')}</div>` : ''}
       <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Play on TV comes after the Roku launch test.</p>
     </div>
     ${nextHtml}
