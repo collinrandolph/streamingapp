@@ -111,16 +111,6 @@ function updateRow(u) {
     <div class="row-actions"><button class="chip" data-act="upd-add" ${data}>+ My List</button><button class="chip" data-act="upd-dismiss" ${data}>Dismiss</button><button class="chip" data-act="upd-manage" data-key="${u.kind}:${u.id}">Manage updates</button></div></div>`;
 }
 
-async function openTrackSheet() {
-  const t = state.title;
-  const o = await api('/track/' + t.kind + '/' + t.id);
-  state.trackItems = o.items;
-  openSheet(`<h2>Track ${esc(t.name)}</h2>
-    <p>New titles from what you tick appear in Updates on Watching. Franchise, ${t.kind === 'tv' ? 'creator' : 'director'} and top cast start ticked.</p>
-    <div class="panel">${o.items.map((it, i) => `<button class="item" data-act="track-tick" data-i="${i}" role="checkbox" aria-checked="${it.on}"><span class="l"><span class="t">${esc(it.label)}</span><span class="s">${esc(it.role)}</span></span><span class="box">${it.on ? '✓' : ''}</span></button>`).join('')}</div>
-    <div class="stack" style="margin-top:14px"><button class="btn-primary" data-act="track-save">${o.tracked ? 'Save' : 'Start tracking'}</button>${o.tracked ? '<button class="btn-secondary" data-act="track-stop">Stop tracking</button>' : ''}</div>`);
-}
-
 function openManageSheet(u) {
   state.refreshOnClose = true;
   openSheet(`<h2>Manage updates</h2>
@@ -249,16 +239,29 @@ async function screenMyList(rid) {
   if (rid !== state.renderId) return;
   state.listItems = {};
   $view.innerHTML = header('My List') + `<p class="hint">Open a title to set your place. Watching: episodes left to watch, aired or announced. Caught up: you've seen everything there is, and the show continues.</p>` +
-    (data.groups.length ? data.groups.map((g) => `<h2 class="sec" style="font-size:16px">${esc(g.label)} <span class="count">${g.items.length}</span></h2>
-      <div class="pad">${g.items.map((t) => {
+    (data.groups.length ? data.groups.map((g) => {
+      const open = !collapsedGroups().includes(g.key);
+      return `<h2 class="sec acc"><button class="acc-btn" data-act="list-acc" data-key="${g.key}" aria-expanded="${open}" aria-controls="grp-${g.key}"><span>${esc(g.label)} <span class="count">${g.items.length}</span></span><span class="chev" aria-hidden="true">›</span></button></h2>
+      <div class="pad" id="grp-${g.key}" ${open ? '' : 'hidden'}>${g.items.map((t) => {
         state.listItems[t.kind + ':' + t.id] = t;
         return `<div class="list-row">
         <a href="#/title/${t.kind}/${t.id}" class="list-main ${t.faded ? 'faded' : ''}">
           <span class="thumb">${t.poster ? `<img src="${img(t.poster, 'w92')}" alt="">` : ''}</span>
           <span class="body"><span class="title">${esc(t.name)}</span><span class="meta">${t.kind === 'tv' ? 'Series' : 'Movie'}${t.year ? ' · ' + esc(t.year) : ''}</span>${t.progress ? `<span class="line">${esc(t.progress)}</span>` : ''}${badgeHtml(t.badge, t.more)}</span>
         </a><button class="more-btn" data-act="row-menu" data-key="${t.kind}:${t.id}" aria-label="More for ${esc(t.name)}">⋯</button></div>`;
-      }).join('')}</div>`).join('')
+      }).join('')}</div>`;
+    }).join('')
       : '<p class="empty">Nothing here yet. Add titles from a service page or search.</p>');
+}
+
+// Which My List groups you've folded away, remembered on this device.
+function collapsedGroups() {
+  try { return JSON.parse(localStorage.getItem('listCollapsed') || '[]'); } catch (e) { return []; }
+}
+function setCollapsed(key, folded) {
+  const list = collapsedGroups().filter((k) => k !== key);
+  if (folded) list.push(key);
+  try { localStorage.setItem('listCollapsed', JSON.stringify(list)); } catch (e) { /* not remembered */ }
 }
 
 // The buttons a title gets, from its state. You set your place on the title page; the app works out the rest.
@@ -420,7 +423,6 @@ async function screenTitle(rid, kind, id) {
       ${actions.main ? opButton(actions.main, opT, 'btn-secondary') : ''}
       ${actions.quiet.length ? `<div class="quiet-row">${actions.quiet.map((a) => opButton(a, opT, 'link-btn')).join('<span aria-hidden="true">·</span>')}</div>` : ''}
       <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Play on TV comes after the Roku launch test.</p>
-      <div class="panel" style="margin-top:12px"><button class="item" data-act="track-open" aria-label="Track ${esc(t.name)}"><span class="l"><span class="t">Track</span><span class="s">${t.tracked ? 'On · related new titles come to Updates' : 'Get updates on related titles'}</span></span><span class="sw" aria-checked="${t.tracked}"></span></button></div>
     </div>
     ${nextHtml}
     ${t.credits.length ? `<h2 class="sec" style="font-size:16px">Cast and crew</h2><div class="people">${t.credits.map((p) => `<a class="person" href="#/person/${p.id}"><span class="face">${p.photo ? `<img src="${img(p.photo, 'w185')}" alt="" loading="lazy">` : esc(initials(p.name))}</span><span class="n">${esc(p.name)}</span><span class="r">${esc(p.role)}</span></a>`).join('')}</div>` : ''}
@@ -440,6 +442,10 @@ async function screenTitle(rid, kind, id) {
 async function loadSeason(rid, n) {
   const t = state.title;
   document.querySelectorAll('#season-chips .chip').forEach((c) => c.setAttribute('aria-pressed', String(Number(c.dataset.n) === n)));
+  // Bring the chosen season's chip into view in the scrolling row (only sideways, so the page doesn't jump).
+  const row = document.getElementById('season-chips');
+  const chip = row && row.querySelector(`.chip[data-n="${n}"]`);
+  if (chip) row.scrollLeft = chip.offsetLeft - row.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2;
   const box = document.getElementById('episodes');
   box.innerHTML = '<p class="loading" style="margin:14px">Loading episodes…</p>';
   try {
@@ -563,20 +569,6 @@ document.addEventListener('click', async (ev) => {
       return;
     }
 
-    if (act === 'track-open') return openTrackSheet();
-    if (act === 'track-tick') {
-      const it = state.trackItems[Number(el.dataset.i)];
-      it.on = !it.on;
-      el.setAttribute('aria-checked', String(it.on));
-      el.querySelector('.box').textContent = it.on ? '✓' : '';
-      return;
-    }
-    if (act === 'track-save') {
-      const t = state.title;
-      await api('/track', { kind: t.kind, id: t.id, name: t.name, poster: t.poster, year: t.year, items: state.trackItems });
-      toast(`Tracking ${t.name}`);
-      return route();
-    }
     if (act === 'track-stop') {
       const t = el.dataset.kind ? { kind: el.dataset.kind, id: el.dataset.id } : state.title;
       await api('/track', { kind: t.kind, id: t.id, op: 'stop' });
@@ -665,6 +657,14 @@ document.addEventListener('click', async (ev) => {
       await api('/library', { op: 'remove', kind: el.dataset.kind, id: el.dataset.id });
       toast('Removed ' + el.dataset.name + ' from My List');
       return route();
+    }
+
+    if (act === 'list-acc') {
+      const open = el.getAttribute('aria-expanded') !== 'true';
+      el.setAttribute('aria-expanded', String(open));
+      document.getElementById('grp-' + el.dataset.key).hidden = !open;
+      setCollapsed(el.dataset.key, !open);
+      return;
     }
 
     if (act === 'row-menu') {

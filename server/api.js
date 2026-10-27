@@ -492,7 +492,10 @@ async function myList() {
     } catch (e) { /* no line this time */ }
   }));
   // My List groups: Watching, Caught up, Not started, Paused, Finished. Started shows split by where you are in them.
+  // Not started titles added in the last 3 days sit in their own group at the top.
+  const recentSince = Date.now() - 3 * 864e5;
   const groupOf = (r) => {
+    if (r.status === 'none' && r.added_at >= recentSince) return 'recent';
     if (r.status !== 'active') return r.status;
     const p = progress.get(r.tmdb_id);
     return p && p.state === 'caught' ? 'caught' : 'watching';
@@ -507,7 +510,7 @@ async function myList() {
     kind: r.kind, id: r.tmdb_id, name: r.name, year: r.year, poster: r.poster, status: r.status,
     group: groupOf(r), pstate: progress.has(r.tmdb_id) ? progress.get(r.tmdb_id).state : r.pstate, tracked: !!r.tracked, progress: lineOf(r), place: r.kind === 'tv' && r.status !== 'none' ? `S${r.next_s}E${r.next_e}` : null
   })));
-  const groups = [['watching', 'Watching'], ['caught', 'Caught up'], ['none', 'Not started'], ['paused', 'Paused'], ['finished', 'Finished']].map(([k, label]) => ({
+  const groups = [['recent', 'Recently added'], ['watching', 'Watching'], ['none', 'Not started'], ['caught', 'Caught up'], ['paused', 'Paused'], ['finished', 'Finished']].map(([k, label]) => ({
     key: k, label, items: items.filter((i) => i.group === k)
   })).filter((g) => g.items.length);
   return { groups };
