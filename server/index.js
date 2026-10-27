@@ -8,6 +8,7 @@ const api = require('./api');
 const config = require('./config');
 const assets = require('./assets');
 const pc = require('./pc');
+const relay = require('./relay');
 
 const PORT = Number(process.env.PORT) || 8787;
 const BACKGROUND = process.argv.includes('--background');
@@ -57,7 +58,18 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/ping') return sendJson(res, 200, pc.info(PORT));
   // The Connect page and its data: the QR link and the start-with-Windows switch.
   if (url.pathname === '/connect') return sendFile(res, 'connect.html', assets.read('connect.html'));
-  if (url.pathname === '/api/connect') return sendJson(res, 200, { ...pc.info(PORT), link: pc.pairLink(PORT), app: pc.APP_URL, startup: pc.startup(), hasKey: !!config.load().tmdbToken });
+  if (url.pathname === '/api/connect') {
+    const c = config.load();
+    return sendJson(res, 200, { ...pc.info(PORT), link: pc.pairLink(PORT), app: pc.APP_URL, startup: pc.startup(), relay: relay.state.connected, keys: { tmdb: !!c.tmdbToken, omdb: !!c.omdbKey } });
+  }
+  // Keys are typed in on the PC itself (the Connect page); other devices on the network can't change them.
+  if (url.pathname === '/api/keys' && req.method === 'POST') {
+    if (!/^(::1|127\.|::ffff:127\.)/.test(req.socket.remoteAddress || '')) return sendJson(res, 403, { error: 'Keys can only be changed on the PC itself.' });
+    try {
+      const c = config.saveKeys(await readJson(req));
+      return sendJson(res, 200, { tmdb: !!c.tmdbToken, omdb: !!c.omdbKey });
+    } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
+  }
   if (url.pathname === '/api/startup' && req.method === 'POST') {
     try { return sendJson(res, 200, pc.setStartup(!!(await readJson(req)).on)); } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
   }
@@ -102,6 +114,7 @@ server.on('error', (e) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   const i = pc.info(PORT);
+  relay.start(() => pc.info(PORT));
   console.log(`Streaming Tracker PC helper ${pc.VERSION} on ${i.name}`);
   console.log('  Connect a phone: http://localhost:' + PORT + '/connect');
   for (const a of i.addrs) console.log('  On your Wi-Fi:   http://' + a + ':' + PORT);

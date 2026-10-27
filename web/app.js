@@ -486,6 +486,7 @@ async function screenTitle(rid, kind, id) {
     <div class="pad" style="margin-top:14px">
       ${actions.main ? opButton(actions.main, opT, 'btn-secondary') : ''}
       <button class="btn-outline tv-btn" data-act="watch-tv" data-title="${esc(t.name)}">${ICONS.tv}Watch on TV</button>
+      <p class="tv-status" id="tv-status"></p>
     </div>
     ${nextHtml}
     ${t.overview ? `<p class="overview clamp" data-act="expand" style="margin-top:18px">${esc(t.overview)}</p>` : ''}
@@ -499,6 +500,17 @@ async function screenTitle(rid, kind, id) {
       <p style="margin:10px 0 0;font-size:11.5px;color:var(--muted)">Availability from JustWatch, via TMDb.</p>
     </div>
     ${ratingsTop ? '' : `<h2 class="sec" style="font-size:16px">Ratings</h2><div class="pad">${ratingsHtml(t)}</div>`}`;
+  // Under Watch on TV: whether the PC can be reached from here, from its relay channel's last "I'm here".
+  if (!state.pc && typeof activePc === 'function' && activePc()) {
+    const pc = activePc();
+    const box = document.getElementById('tv-status');
+    if (!pc.relay) box.textContent = `Through ${pc.name} on the same Wi-Fi`;
+    else relayStatus(pc).then((st) => {
+      if (rid !== state.renderId) return;
+      box.textContent = st.online ? `Through ${pc.name} · online` : `${pc.name} seems offline (${seenAgo(st.seen)}). Watch on TV will offer your Wi-Fi.`;
+      box.classList.toggle('offline', !st.online);
+    });
+  }
   if (isTv && t.seasons.length) {
     const start = t.seasons.find((s) => s.n === t.next.s) ? t.next.s : t.seasons[0].n;
     loadSeason(rid, start);
@@ -748,13 +760,32 @@ document.addEventListener('click', async (ev) => {
 
     // Watch on TV: replay the calibrated search path with this title; the TV stops on Roku's page for it.
     if (act === 'watch-tv' && !state.pc) {
-      // Hosted app: a PC page does the pressing, then closes.
+      // Hosted app: through the PC's relay from anywhere; if that fails, through a PC page on the same Wi-Fi.
       if (!pcUrl()) {
-        return openSheet(`<h2>Watch on TV needs your PC</h2><p>Add your PC's address in Settings. When you tap Watch on TV, a page on your PC opens for a moment and sends the title to the TV.</p><div class="stack"><a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/settings">Open Settings</a></div>`);
+        return openSheet(`<h2>Watch on TV needs your PC</h2><p>Run the PC helper on your computer and scan its QR code. Settings › Your PCs has the download.</p><div class="stack"><a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/settings">Open Settings</a></div>`);
       }
-      el.innerHTML = ICONS.tv + 'Opening on TV…';
-      return goToBridge('tv', { title: el.dataset.title });
+      const pc = activePc();
+      const title = el.dataset.title;
+      if (!pc || !pc.relay) {
+        el.innerHTML = ICONS.tv + 'Opening on TV…';
+        return goToBridge('tv', { title });
+      }
+      const label = el.innerHTML;
+      el.disabled = true;
+      el.innerHTML = ICONS.tv + 'Sending to your TV…';
+      try {
+        const r = await relayRequest(pc, 'tv', { title });
+        if (!r.ok) return toast(r.error || 'Your PC reported a problem.');
+        return toast(`${title} is going to ${r.tv || 'your TV'}. Pick it from the search results with your remote.`);
+      } catch (e) {
+        return openSheet(`<h2>Couldn't reach ${esc(pc.name)}</h2><p>${esc(e.message)} It may be off, asleep, or offline. If you're on the same Wi-Fi as the PC, try that way instead.</p>
+          <div class="stack"><button class="btn-primary" data-act="watch-tv-wifi" data-title="${esc(title)}">Try over Wi-Fi</button></div>`);
+      } finally {
+        el.disabled = false;
+        el.innerHTML = label;
+      }
     }
+    if (act === 'watch-tv-wifi') return goToBridge('tv', { title: el.dataset.title });
     if (act === 'watch-tv') {
       const s = await api('/roku');
       if (!s.device) {

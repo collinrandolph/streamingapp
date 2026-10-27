@@ -14,7 +14,7 @@ const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 const SERVER = path.join(ROOT, 'server');
 const EXE = path.join(DIST, 'StreamingTracker-PC.exe');
-const MODULES = ['index', 'api', 'assets', 'config', 'db', 'schema', 'tmdb', 'tracking', 'good', 'wikidata', 'roku', 'pc'];
+const MODULES = ['index', 'api', 'assets', 'config', 'db', 'schema', 'tmdb', 'tracking', 'good', 'wikidata', 'roku', 'pc', 'relay'];
 const CORE = ['api', 'tmdb', 'tracking', 'good', 'wikidata', 'schema'];
 const FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
 

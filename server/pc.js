@@ -7,7 +7,7 @@ const path = require('path');
 const db = require('./db');
 const { PACKAGED } = require('./config');
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const APP_URL = process.env.APP_URL || 'https://collinrandolph.github.io/streamingapp/';
 // Adapters a phone can't reach: virtual switches, VPN and Bluetooth links.
 const SKIP_ADAPTER = /vEthernet|VirtualBox|VMware|Hyper-V|WSL|Loopback|Bluetooth|Tailscale|ZeroTier|docker/i;
@@ -42,7 +42,8 @@ function info(port) {
 // The link in the QR code: opens the app with everything it needs to connect to this PC.
 function pairLink(port) {
   const i = info(port);
-  const payload = { v: 1, id: i.id, name: i.name, port, addrs: i.addrs, ver: VERSION };
+  // relay: the private channel and key for reaching this PC from anywhere (see relay.js).
+  const payload = { v: 1, id: i.id, name: i.name, port, addrs: i.addrs, ver: VERSION, relay: require('./relay').pairing() };
   const d = Buffer.from(JSON.stringify(payload)).toString('base64url');
   return APP_URL.replace(/#.*$/, '') + '#/pair?d=' + d;
 }

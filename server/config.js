@@ -28,4 +28,14 @@ function load() {
   };
 }
 
-module.exports = { load, ROOT, PACKAGED, CONFIG_FILE: FILE };
+// Saves keys entered on the Connect page into config.local.json, keeping anything else already there.
+function saveKeys(patch) {
+  let local = {};
+  try { local = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) { /* new file */ }
+  for (const k of ['tmdbToken', 'omdbKey']) if (typeof patch[k] === 'string') local[k] = patch[k].trim();
+  fs.mkdirSync(path.dirname(FILE), { recursive: true });
+  fs.writeFileSync(FILE, JSON.stringify(local, null, 2) + '\n');
+  return load();
+}
+
+module.exports = { load, saveKeys, ROOT, PACKAGED, CONFIG_FILE: FILE };

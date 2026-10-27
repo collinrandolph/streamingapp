@@ -39,9 +39,9 @@
     <div id="qr">Making the QR code…</div>
     <div>
       <ol>
-        <li>Make sure your phone is on the same Wi-Fi as this PC.</li>
         <li>Point your phone's camera at the code and open the link.</li>
-        <li>The app opens and remembers this PC. Watch on TV and the remote then work through it.</li>
+        <li>The app opens, remembers this PC, and takes its TMDb key.</li>
+        <li>Watch on TV then works through this PC from anywhere, as long as the PC is on with this helper running. On the same Wi-Fi it also works as a fallback.</li>
       </ol>
       <p class="note">Already set up on another PC? Scanning switches the app to this one; the app keeps a list of your PCs.</p>
       <p class="note" id="link"></p>
@@ -49,6 +49,15 @@
   </div>
   <div class="meta">
     <div class="row"><div><div class="k">This PC's addresses on your network</div><div class="v" id="addrs">…</div></div></div>
+    <div class="row" style="display:block">
+      <div class="k">TMDb key</div>
+      <div class="v" id="key-state">…</div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <input id="tmdb" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your TMDb API Read Access Token" style="flex:1;min-width:0;background:#0F1115;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px 12px;font:inherit">
+        <button id="save-key" style="background:var(--accent);color:var(--ink);border:0;border-radius:10px;padding:0 16px;font:inherit;font-weight:700;cursor:pointer">Save</button>
+      </div>
+      <p class="note">Get one free at themoviedb.org › Settings › API. Phones connected to this PC get it automatically, sent encrypted, so you only enter it here once.</p>
+    </div>
     <div class="row">
       <div><div class="k">Start with Windows</div><div class="v" id="startup-text">…</div></div>
       <button class="switch" id="startup" role="switch" aria-checked="false" aria-label="Start with Windows"></button>
@@ -73,6 +82,20 @@
   } else {
     $('qr').innerHTML = '<span class="warn">The QR code needs an internet connection to draw. Use the link below instead.</span>';
   }
+
+  const showKeys = (k) => {
+    $('key-state').textContent = k.tmdb ? 'Saved on this PC ✓ (paste a new one to replace it)' : 'Not set yet. The app needs one to look up shows and movies.';
+  };
+  showKeys(info.keys);
+  $('save-key').addEventListener('click', async () => {
+    const v = $('tmdb').value.trim();
+    if (!v) return;
+    const r = await fetch('/api/keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tmdbToken: v }) });
+    const k = await r.json();
+    if (!r.ok) return alert(k.error);
+    $('tmdb').value = '';
+    showKeys(k);
+  });
 
   const sw = $('startup');
   const showStartup = (s) => {

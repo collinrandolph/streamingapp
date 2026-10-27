@@ -2,14 +2,14 @@
 // App files: network first (so updates arrive), falling back to the stored copy offline.
 // sql.js and posters: stored copy first, since they don't change.
 // TMDb and Wikidata data aren't handled here; the app's data code caches those itself.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = `shell-${VERSION}`;
 const STATIC = 'static-v1';
 const POSTERS = 'posters-v1';
 const POSTER_LIMIT = 500;
 const SQLJS = 'https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/';
 const FILES = [
-  './', 'index.html', 'app.css', 'app.js', 'core.js', 'settings.js', 'good.js', 'remote.js', 'manifest.webmanifest', 'icon.svg',
+  './', 'index.html', 'app.css', 'app.js', 'core.js', 'settings.js', 'relay.js', 'good.js', 'remote.js', 'manifest.webmanifest', 'icon.svg',
   'core/schema.js', 'core/tmdb.js', 'core/wikidata.js', 'core/tracking.js', 'core/good.js', 'core/api.js'
 ];
 

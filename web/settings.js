@@ -31,7 +31,11 @@ function rememberPc(info) {
   const old = pcList().find((p) => p.id === info.id);
   const addrs = (info.addrs || []).filter((a) => /^[\d.]+$/.test(a));
   const addr = old && addrs.includes(old.addr) ? old.addr : addrs[0];
-  const pc = { id: String(info.id), name: String(info.name || 'PC').slice(0, 60), port: Number(info.port) || 8787, addrs, addr, ver: info.ver || info.version || '', seenAt: Date.now() };
+  // relay: the PC's private channel and key from its QR code (see relay.js). Kept if this update has none,
+  // as when the PC itself served the page.
+  const r = info.relay;
+  const relay = r && /^https:\/\//.test(r.s) && /^[\w-]{10,}$/.test(r.t) && /^[\w-]{40,}$/.test(r.k) ? { s: r.s, t: r.t, k: r.k } : (old && old.relay) || null;
+  const pc = { id: String(info.id), name: String(info.name || 'PC').slice(0, 60), port: Number(info.port) || 8787, addrs, addr, ver: info.ver || info.version || '', relay, seenAt: Date.now() };
   state.core.saveSettings({ pcs: [pc, ...pcs], activePc: pc.id });
   return pc;
 }
@@ -54,13 +58,32 @@ function screenPair() {
   const empty = state.core.isEmpty();
   $view.innerHTML = `<div class="bridge">
     <h1>Connected to ${esc(pc.name)}</h1>
-    <p>Watch on TV and the remote now go through this PC at ${esc(pc.addr)}. It needs to be on, with the helper running, and your phone on the same Wi-Fi.</p>
+    <p>${pc.relay
+      ? 'Watch on TV now goes through this PC from anywhere, over the internet. The PC needs to be on with the helper running; your phone can be on any network.'
+      : `Watch on TV now goes through this PC at ${esc(pc.addr)}. It needs to be on, with the helper running, and your phone on the same Wi-Fi.`}</p>
     <div class="stack" style="margin:22px auto 0;max-width:320px">
       <button class="${empty ? 'btn-primary' : 'btn-secondary'}" data-act="set-import-pc">Copy my list from this PC</button>
       <a class="${empty ? 'btn-secondary' : 'btn-primary'}" style="display:flex;align-items:center;justify-content:center" href="#/watching">${empty ? 'Skip' : 'Done'}</a>
     </div>
-    ${pc.addrs.length > 1 ? `<p class="hint" style="margin-top:16px">This PC has ${pc.addrs.length} addresses. If Watch on TV can't reach it, pick another in Settings.</p>` : ''}
+    <p class="hint" id="pair-keys" style="margin-top:16px"></p>
+    ${pc.addrs.length > 1 ? `<p class="hint" style="margin-top:8px">This PC has ${pc.addrs.length} addresses. If Watch on TV can't reach it, pick another in Settings.</p>` : ''}
   </div>`;
+  // No TMDb key on this phone yet: ask the PC for its key.
+  if (!state.core.settings().tmdbToken && pc.relay) {
+    const note = document.getElementById('pair-keys');
+    note.textContent = 'Getting the TMDb key from ' + pc.name + '…';
+    fetchKeysFromPc(pc).then((msg) => { note.textContent = msg; }, (e) => { note.textContent = e.message; });
+  }
+}
+
+// Asks a PC for its TMDb (and OMDb) keys over the encrypted relay and saves them on this device.
+async function fetchKeysFromPc(pc) {
+  const r = await relayRequest(pc, 'keys', {}, 10000);
+  if (!r.ok) throw new Error(r.error || 'The PC has no TMDb key yet.');
+  const s = state.core.settings();
+  state.core.saveSettings({ tmdbToken: r.tmdbToken, omdbKey: s.omdbKey || r.omdbKey || '' });
+  state.status = null;
+  return 'Got the TMDb key from ' + pc.name + ' ✓';
 }
 
 // ---------- Talking to the PC from the hosted app ----------
@@ -173,6 +196,16 @@ async function screenSettings(rid) {
       <p class="hint" style="margin:10px 0 0">A backup holds your services, My List, places in shows, follows and saved searches. Restoring replaces what's on this device.</p>
     </div></div>
     <p class="attrib">This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
+  // Fill in each PC's online status from its relay channel.
+  for (const p of pcList()) {
+    if (!p.relay) continue;
+    relayStatus(p).then((st) => {
+      const el = document.querySelector(`[data-pc-status="${CSS.escape(p.id)}"]`);
+      if (!el || rid !== state.renderId) return;
+      el.textContent = st.online ? `Online from anywhere · ${seenAgo(st.seen)}${st.tv ? ' · TV: ' + st.tv : ''}` : `Offline over the internet (${seenAgo(st.seen)}). Same Wi-Fi still works if it's on.`;
+      el.classList.toggle('online', st.online);
+    });
+  }
 }
 
 // The PC list: which one is in use, its address, and how to add another.
@@ -184,13 +217,14 @@ function pcsHtml() {
       <span class="l"><span class="t">${esc(p.name)}${p.id === (active && active.id) ? ' <span class="pc-on">In use</span>' : ''}</span>
         <span class="s">${p.addrs.length > 1
           ? `<select class="pc-addr" data-pc="${esc(p.id)}" aria-label="Address for ${esc(p.name)}">${p.addrs.map((a) => `<option ${a === p.addr ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>:${p.port}`
-          : `${esc(p.addr)}:${p.port}`}${p.ver ? ' · helper ' + esc(p.ver) : ''}</span></span>
+          : `${esc(p.addr)}:${p.port}`}${p.ver ? ' · helper ' + esc(p.ver) : ''}</span>
+        <span class="s pc-status" data-pc-status="${esc(p.id)}">${p.relay ? 'Checking…' : 'Same Wi-Fi only. Scan its QR code again to reach it from anywhere.'}</span></span>
       <span style="display:flex;gap:4px">${p.id === (active && active.id) ? '' : `<button class="chip" data-act="set-pc-use" data-pc="${esc(p.id)}">Use</button>`}<button class="link-btn" data-act="set-pc-forget" data-pc="${esc(p.id)}" data-name="${esc(p.name)}">Forget</button></span>
     </div>`).join('');
   return `<div class="pad"><div class="panel">
       ${rows || (legacy ? `<div class="item"><span class="l"><span class="t">PC at ${esc(legacy.replace(/^https?:\/\//, ''))}</span><span class="s">Added by address. Scan its QR code to name it and keep it up to date.</span></span></div>` : '<div class="item"><span class="l"><span class="t">No PC yet</span><span class="s">Watch on TV and the remote work through a PC running the helper.</span></span></div>')}
     </div>
-    ${active || legacy ? `<div class="stack" style="margin-top:10px">${state.pc ? '' : '<button class="btn-secondary" data-act="set-import-pc">Copy my list from the PC in use</button>'}</div>` : ''}
+    ${active || legacy ? `<div class="stack" style="margin-top:10px">${state.pc ? '' : '<button class="btn-secondary" data-act="set-import-pc">Copy my list from the PC in use</button>'}${active && active.relay && !state.pc ? '<button class="btn-secondary" data-act="set-pc-keys">Get the TMDb key from the PC in use</button>' : ''}</div>` : ''}
     <div class="panel" style="padding:14px;margin-top:10px">
       <p style="margin:0 0 8px;font-weight:600">Add a PC</p>
       <ol class="pc-steps">
@@ -228,6 +262,11 @@ document.addEventListener('click', async (ev) => {
       if (!m) return toast('Enter an address like 192.168.0.104:8787');
       rememberPc({ id: 'addr-' + m[1], name: 'PC at ' + m[1], port: Number(m[2]) || 8787, addrs: [m[1]] });
       toast('PC address saved');
+      return route();
+    }
+    if (act === 'set-pc-keys') {
+      el.disabled = true;
+      try { toast(await fetchKeysFromPc(activePc())); } finally { el.disabled = false; }
       return route();
     }
     if (act === 'set-pc-use') {
