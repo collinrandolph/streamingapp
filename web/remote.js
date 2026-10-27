@@ -9,10 +9,18 @@ const CAL_STEPS = [
   { id: 'topbar', title: 'Go to the top bar', text: 'Use the arrows to reach the top bar or menu of the home screen. Press against the edge as much as you like; extra presses there are harmless.', keys: true },
   { id: 'search', title: 'Go to Search and open it', text: 'Arrow to Search and press OK. Stop when the search keyboard is on screen.', keys: true },
   { id: 'type', title: `Type ${CAL_WORD}`, text: `Type ${CAL_WORD} in the box below and tap Send. The letters should appear in the TV's search box.`, typing: true },
-  { id: 'result', title: 'Highlight the first result', text: 'Use the arrows to move from the keyboard to the first search result. Don\'t press OK yet.', keys: true },
-  { id: 'open', title: 'Open it', text: 'Press OK. You should land on the title\'s page, with nothing playing.', keys: true },
-  { id: 'test', title: 'Test run', text: 'The app now replays everything from Home with a different title. Watch the TV, then say where it landed.', test: true }
+  { id: 'test', title: 'Test run', text: 'The app now replays everything from Home and types a different title. Watch the TV: it should end on the search screen with that title in the results.', test: true }
 ];
+
+// ---------- Draft ----------
+// An unsaved calibration is kept on this device, so a reload or a trip back to Remote doesn't lose it.
+const CAL_KEY = 'rokuCalDraft';
+function loadCalDraft() {
+  try { return JSON.parse(sessionStorage.getItem(CAL_KEY) || 'null'); } catch (e) { return null; }
+}
+function saveCalDraft() {
+  try { if (state.cal) sessionStorage.setItem(CAL_KEY, JSON.stringify(state.cal)); else sessionStorage.removeItem(CAL_KEY); } catch (e) { /* kept in memory only */ }
+}
 
 // ---------- Presses ----------
 
@@ -101,6 +109,7 @@ function deviceBanner(s) {
 async function screenRemote(rid) {
   renderNav(null, true);
   state.cal = null;
+  const draft = loadCalDraft();
   const s = await api('/roku');
   if (rid !== state.renderId) return;
   state.roku = s;
@@ -109,9 +118,11 @@ async function screenRemote(rid) {
     <div class="pad"><h1 style="margin:4px 0 10px;font-size:26px">Remote</h1>${deviceBanner(s)}</div>
     ${remotePad()}
     <h2 class="sec" style="font-size:16px">Search path</h2>
-    <div class="pad"><div class="panel"><div class="item"><span class="l"><span class="t">${c ? 'Calibrated' : 'Not calibrated yet'}</span><span class="s">${c ? `Saved ${esc(new Date(c.savedAt).toLocaleDateString())} · ${c.typeMode === 'grid' ? 'types with arrows' : 'types letters directly'}${c.stale ? ' · Roku updated since, worth re-checking' : ''}` : 'Teach the app how to reach Roku search, so Play on TV can open a title\'s page.'}</span></span>
-      <a class="chip" href="#/remote/calibrate">${c ? 'Recalibrate' : 'Calibrate'}</a></div>
-      ${c ? '<div class="item"><span class="l"><span class="t">Try it</span><span class="s">Open a title\'s page on the TV through search</span></span><button class="chip" data-act="rk-try">Try</button></div>' : ''}</div></div>
+    <div class="pad"><div class="panel"><div class="item"><span class="l"><span class="t">${c ? 'Calibrated' : 'Not calibrated yet'}</span><span class="s">${c ? `Saved ${esc(new Date(c.savedAt).toLocaleDateString())} · ${c.typeMode === 'grid' ? 'types with arrows' : 'types letters directly'}${c.stale ? ' · Roku updated since, worth re-checking' : ''}` : 'Teach the app how to reach Roku search, so Watch on TV can bring up a title.'}</span></span>
+      <a class="chip" href="#/remote/calibrate">${draft ? 'Continue' : c ? 'Recalibrate' : 'Calibrate'}</a></div>
+      ${s.lastTest ? `<div class="item"><span class="l"><span class="t">Unsaved test run</span><span class="s">${esc(s.lastTest.title)} · ${esc(new Date(s.lastTest.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}. If the title showed up, save it.</span></span><button class="chip" data-act="cal-save-last">Save</button></div>` : ''}
+      ${draft ? `<div class="item"><span class="l"><span class="t">Unsaved calibration</span><span class="s">Stopped at step ${draft.step + 1} of ${CAL_STEPS.length}: ${esc(CAL_STEPS[draft.step].title)}</span></span><button class="chip" data-act="cal-discard">Discard</button></div>` : ''}
+      ${c ? '<div class="item"><span class="l"><span class="t">Try it</span><span class="s">Bring up a title\'s search results on the TV</span></span><button class="chip" data-act="rk-try">Try</button></div>' : ''}</div></div>
     <h2 class="sec" style="font-size:16px">${s.dryRun ? 'Logged presses' : 'Recent presses'} <button class="link-btn" data-act="rk-log-clear" style="font-size:12px">Clear</button></h2>
     <div class="pad"><div class="rk-log" id="rk-log">${logHtml(s.log)}</div></div>`;
 }
@@ -119,7 +130,7 @@ async function screenRemote(rid) {
 function openSetup() {
   const d = state.roku && state.roku.device;
   openSheet(`<h2>Set up your Roku</h2>
-    <p>Find its address on the TV under Settings › Network › About. For remote presses, also set Settings › System › Advanced system settings › Control by mobile apps to Enabled.</p>
+    <p>Find its address on the TV under Settings › Network › About. Remote presses also need Settings › System › Advanced system settings › Control by mobile apps › Network access set to Default or Permissive, not Disabled.</p>
     <label class="lbl" for="rk-ip">IP address</label>
     <input id="rk-ip" class="search" type="text" inputmode="decimal" placeholder="192.168.0.42" value="${esc(d ? d.ip : '')}">
     <div id="rk-found" style="margin-top:10px"></div>
@@ -137,11 +148,12 @@ async function screenCalibrate(rid) {
   const s = await api('/roku');
   if (rid !== state.renderId) return;
   state.roku = s;
-  if (!state.cal) state.cal = { step: 0, rec: {}, typeMode: 'text', typed: '', testTitle: 'Breaking Bad' };
+  if (!state.cal) state.cal = loadCalDraft() || { step: 0, rec: {}, typeMode: 'text', typed: '', testTitle: 'Breaking Bad' };
   renderCalibrate();
 }
 
 function renderCalibrate() {
+  saveCalDraft();
   const cal = state.cal;
   const step = CAL_STEPS[cal.step];
   const s = state.roku;
@@ -181,7 +193,7 @@ function testStepHtml() {
   return `<label class="lbl" for="cal-test-title">Test title</label>
     <div style="display:flex;gap:8px;margin-bottom:12px"><input id="cal-test-title" class="search" type="text" value="${esc(cal.testTitle)}"><button class="btn-primary" style="width:auto;padding:0 18px" data-act="cal-run">Run</button></div>
     ${cal.ran ? `<div class="stack">
-      <button class="btn-primary" data-act="cal-save">Landed on the right page · Save</button>
+      <button class="btn-primary" data-act="cal-save">The title showed up · Save</button>
       <button class="btn-secondary" data-act="cal-wrong">Wrong place</button>
     </div>` : ''}`;
 }
@@ -191,7 +203,6 @@ function calStepReady() {
   const step = CAL_STEPS[cal.step];
   if (step.id === 'type') return cal.typeMode === 'grid' ? (cal.rec.type || []).filter((k) => k === 'Select').length >= CAL_WORD.length : !!cal.typed;
   if (step.id === 'home') return (cal.rec.home || []).includes('Home');
-  if (step.id === 'open') return (cal.rec.open || []).includes('Select');
   if (step.id === 'search') return (cal.rec.search || []).includes('Select');
   return true;
 }
@@ -212,6 +223,7 @@ function calRecordHtml() {
     <div class="rk-log">${keys.length ? keys.map((k) => `<span class="rk-log-key">${esc(k)}</span>`).join('') + '<button class="link-btn" data-act="cal-undo" style="font-size:12px">Undo last</button>' : '<span class="hint" style="margin:0">Nothing yet.</span>'}</div>`;
 }
 function renderCalRecord() {
+  saveCalDraft();
   const box = document.getElementById('cal-record');
   if (box) box.innerHTML = calRecordHtml();
   const done = document.querySelector('[data-act="cal-done"]');
@@ -228,7 +240,7 @@ function calRecording() {
     for (const k of r.type || []) { if (k === 'Select') segments.push([]); else segments[segments.length - 1].push(k); }
     type.segments = segments.slice(0, CAL_WORD.length);
   }
-  return { topbar: r.topbar || [], search: r.search || [], result: r.result || [], open: r.open || [], type };
+  return { topbar: r.topbar || [], search: r.search || [], type };
 }
 
 // ---------- Events ----------
@@ -260,7 +272,7 @@ document.addEventListener('click', async (ev) => {
     if (act === 'rk-pick') { document.getElementById('rk-ip').value = el.dataset.ip; return; }
     if (act === 'rk-log-clear') { await api('/roku/log-clear', {}); return refreshLog(); }
     if (act === 'rk-try') {
-      openSheet(`<h2>Open a title on the TV</h2><p>Replays the calibrated search path with this title and stops on its page.</p>
+      openSheet(`<h2>Find a title on the TV</h2><p>Replays the calibrated search path and types this title, stopping on the search results.</p>
         <input id="rk-try-title" class="search" type="text" value="Severance"><div class="stack" style="margin-top:12px"><button class="btn-primary" data-act="rk-try-run">Open on TV</button></div>`);
       return;
     }
@@ -270,6 +282,15 @@ document.addEventListener('click', async (ev) => {
       toast(r.dry ? `Dry run: ${r.presses} presses logged` : 'Sent to the TV');
       return refreshLog();
     }
+
+    if (act === 'cal-save-last' || (act === 'cal-save' && !cal)) {
+      await api('/roku/calibration', { useLastTest: true });
+      state.cal = null;
+      saveCalDraft();
+      toast('Search path saved');
+      return act === 'cal-save' ? (location.hash = '#/remote') : route();
+    }
+    if (act === 'cal-discard') { state.cal = null; saveCalDraft(); toast('Calibration discarded'); return route(); }
 
     if (!cal) return;
     const step = CAL_STEPS[cal.step];
@@ -306,8 +327,10 @@ document.addEventListener('click', async (ev) => {
       return refreshLog();
     }
     if (act === 'cal-save') {
-      await api('/roku/calibration', { rec: calRecording() });
+      const saved = await api('/roku/calibration', { rec: calRecording() });
+      if (!saved || !saved.calibration) throw new Error("The search path didn't save. Try again.");
       state.cal = null;
+      saveCalDraft();
       toast('Search path saved');
       location.hash = '#/remote';
       return;

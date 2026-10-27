@@ -1,5 +1,5 @@
 // Roku control over ECP (port 8060): a phone remote, and a search path you record once with the
-// calibration wizard and the app replays to open a title's page on the TV.
+// calibration wizard and the app replays to bring up a title's search results on the TV.
 // With no Roku set up, everything is a dry run: presses are logged here instead of sent.
 const http = require('http');
 const dgram = require('dgram');
@@ -9,7 +9,7 @@ const KEYS = new Set(['Home', 'Rev', 'Fwd', 'Play', 'Select', 'Left', 'Right', '
 const MOVES = { Up: [0, -1], Down: [0, 1], Left: [-1, 0], Right: [1, 0] };
 const OPPOSITE = { Up: 'Down', Down: 'Up', Left: 'Right', Right: 'Left' };
 // Waits used when replaying the recorded path, in ms. Generous: menus on older Rokus load slowly.
-const WAIT = { press: 150, afterHome: 1800, afterStep: 500, afterOpenSearch: 1500, afterTyping: 1800, afterOpen: 800 };
+const WAIT = { press: 150, afterHome: 1800, afterStep: 500, afterOpenSearch: 1500 };
 // The on-screen keyboard is assumed to be a grid of these characters in order, filled row by row.
 const GRID_CHARS = 'abcdefghijklmnopqrstuvwxyz1234567890';
 
@@ -69,7 +69,7 @@ async function send(path, label, opts = {}) {
   try {
     const r = await request(d.ip, 'POST', path, 3000);
     // 403 means the Roku refused: "Control by mobile apps" is off or limited.
-    if (r.status === 403) throw Object.assign(new Error('The Roku refused the press. Set Settings › System › Advanced system settings › Control by mobile apps to Enabled.'), { status: 409 });
+    if (r.status === 403) throw Object.assign(new Error('The Roku refused the press. On the TV, go to Settings › System › Advanced system settings › Control by mobile apps › Network access and choose Default (or Permissive if Default still refuses).'), { status: 409 });
     if (r.status >= 400) throw Object.assign(new Error('The Roku answered HTTP ' + r.status), { status: 502 });
     note({ key: label });
   } catch (e) {
@@ -87,6 +87,7 @@ function status() {
     device: d,
     dryRun: !d,
     calibration: c ? { savedAt: c.savedAt, version: c.version, typeMode: c.type.mode, stale: !!(d && c.version && d.version && c.version !== d.version) } : null,
+    lastTest: lastTestSummary(c),
     log: log.slice(-40)
   };
 }
@@ -182,13 +183,11 @@ function inferGrid(word, segments) {
 
 // rec: what the wizard recorded per step. Returns the tidied path that replay uses.
 function buildCalibration(rec) {
-  const steps = ['topbar', 'search', 'result', 'open'];
+  const steps = ['topbar', 'search'];
   for (const s of steps) if (!Array.isArray(rec[s])) throw Object.assign(new Error('Missing step: ' + s), { status: 400 });
   const cal = {
     topbar: padEdges(tidy(rec.topbar)),
     search: tidy(rec.search),
-    result: tidy(rec.result),
-    open: tidy(rec.open),
     type: { mode: 'text' }
   };
   if (rec.type && rec.type.mode === 'grid') {
@@ -216,18 +215,19 @@ function gridPresses(t, type) {
   return presses;
 }
 
-// The full sequence to open a title's page through Roku search, as [key or text, wait after] pairs.
+// The sequence that gets a title's search results on screen, as [key or text, wait after] pairs.
+// It stops once the title is typed: Roku sometimes shows a suggestion bar above the results, so the
+// first result isn't always in the same place, and you pick the title with the remote.
 function plan(cal, title) {
   const seq = [];
   const add = (keys, after) => keys.forEach((k, i) => seq.push([k, i === keys.length - 1 ? after : WAIT.press]));
   add(['Home'], WAIT.afterHome);
   add(cal.topbar, WAIT.afterStep);
   add(cal.search, WAIT.afterOpenSearch);
-  add(Array(25).fill('Backspace'), WAIT.afterStep); // clear any earlier search
-  if (cal.type.mode === 'grid') add(gridPresses(title, cal.type), WAIT.afterTyping);
-  else add([...title].map((ch) => 'Lit_' + ch), WAIT.afterTyping);
-  add(cal.result, WAIT.afterStep);
-  add(cal.open, WAIT.afterOpen);
+  // No clearing first: Roku empties the search box itself when Search opens, and Backspace on an
+  // empty box only plays an error beep (seen on Roku OS 16.0.4).
+  if (cal.type.mode === 'grid') add(gridPresses(title, cal.type), 0);
+  else add([...title].map((ch) => 'Lit_' + ch), 0);
   return seq;
 }
 
@@ -235,12 +235,25 @@ async function runPlan(seq, dry) {
   for (const [k, after] of seq) {
     const path = k.startsWith('Lit_') ? '/keypress/Lit_' + encodeURIComponent(k.slice(4)) : '/keypress/' + k;
     await send(path, k, { dry });
-    if (!dry) await sleep(after);
+    if (!dry && after) await sleep(after);
   }
 }
 
+// The wizard's most recent test run, kept on the server so Save still works if the phone loses its progress.
+function lastTestSummary(c) {
+  const t = getSetting('rokuLastTest');
+  if (!t || (c && c.savedAt >= t.at)) return null;
+  return { title: t.title, at: t.at };
+}
+
 function saveCalibration(b) {
-  const cal = buildCalibration(b.rec || {});
+  let rec = b.rec;
+  if (!rec && b.useLastTest) {
+    const t = getSetting('rokuLastTest');
+    if (!t) throw Object.assign(new Error('No test run to save. Run the calibration again.'), { status: 409 });
+    rec = t.rec;
+  }
+  const cal = buildCalibration(rec || {});
   const d = device();
   setSetting('rokuCalibration', { ...cal, version: d ? d.version : null, savedAt: Date.now() });
   return { calibration: calibration(), status: status() };
@@ -252,6 +265,7 @@ async function openBySearch(b) {
   if (!title) throw Object.assign(new Error('Which title?'), { status: 400 });
   const cal = b.rec ? buildCalibration(b.rec) : calibration();
   if (!cal) throw Object.assign(new Error('Calibrate the search path first.'), { status: 409 });
+  if (b.rec) setSetting('rokuLastTest', { rec: b.rec, title, at: Date.now() });
   const seq = plan(cal, title);
   const dry = !device();
   await runPlan(seq, dry);

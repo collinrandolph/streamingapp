@@ -68,6 +68,7 @@ const ICONS = {
   following: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>',
   services: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
   good: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
+  tv: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   remote: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="5"/><circle cx="12" cy="8" r="2"/><path d="M10 14h.01M14 14h.01M10 17h.01M14 17h.01"/></svg>',
   search: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>'
 };
@@ -466,7 +467,7 @@ async function screenTitle(rid, kind, id) {
       </div></div>
     <div class="pad" style="margin-top:14px">
       ${actions.main ? opButton(actions.main, opT, 'btn-secondary') : ''}
-      <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Play on TV comes after the Roku launch test.</p>
+      <button class="btn-outline tv-btn" data-act="watch-tv" data-title="${esc(t.name)}">${ICONS.tv}Watch on TV</button>
     </div>
     ${nextHtml}
     ${t.overview ? `<p class="overview clamp" data-act="expand" style="margin-top:18px">${esc(t.overview)}</p>` : ''}
@@ -706,6 +707,28 @@ document.addEventListener('click', async (ev) => {
       setView(key, currentView(key) === 'list' ? 'carousel' : 'list');
       redrawSection(key);
       el.outerHTML = viewBtn(key, el.dataset.title);
+      return;
+    }
+
+    // Watch on TV: replay the calibrated search path with this title; the TV stops on Roku's page for it.
+    if (act === 'watch-tv') {
+      const s = await api('/roku');
+      if (!s.device) {
+        return openSheet(`<h2>Connect your TV first</h2><p>Set up your Roku on the Remote screen, then calibrate the search path once.</p><div class="stack"><a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/remote">Open Remote</a></div>`);
+      }
+      if (!s.calibration) {
+        return openSheet(`<h2>Calibrate once</h2><p>Teach the app how to reach Roku search on ${esc(s.device.name)}. It takes about a minute, standing where you can see the TV.</p><div class="stack"><a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/remote/calibrate">Start calibration</a></div>`);
+      }
+      el.disabled = true;
+      const label = el.innerHTML;
+      el.innerHTML = ICONS.tv + 'Opening on TV…';
+      try {
+        await api('/roku/open-search', { title: el.dataset.title });
+        toast(`${el.dataset.title} is in the search results on ${s.device.name}. Pick it with your remote.`);
+      } finally {
+        el.disabled = false;
+        el.innerHTML = label;
+      }
       return;
     }
 

@@ -289,3 +289,5 @@ h2.sec.acc { margin: 14px 8px 6px; font-size: 16px; }
 .cal-actions .skip[disabled] { opacity: .35; }
 .cal-note { font-size: 13px; color: var(--text-2); line-height: 1.45; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
 .cal-actions .skip { min-height: 46px; padding: 0 12px; font-weight: 600; color: var(--muted); }
+.tv-btn { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
+.tv-btn[disabled] { opacity: .6; }
