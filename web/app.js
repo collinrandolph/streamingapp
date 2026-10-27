@@ -68,6 +68,7 @@ const ICONS = {
   following: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>',
   services: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
   good: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
+  remote: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="5"/><circle cx="12" cy="8" r="2"/><path d="M10 14h.01M14 14h.01M10 17h.01M14 17h.01"/></svg>',
   search: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>'
 };
 const TABS = [['watching', 'Watching'], ['mylist', 'My List'], ['following', 'Following'], ['services', 'Services'], ['good', 'Good Stuff']];
@@ -80,7 +81,7 @@ function renderNav(current, show) {
 }
 
 function header(title) {
-  return `<div class="top"><h1>${esc(title)}</h1><a class="icon-btn" href="#/search" aria-label="Search all titles">${ICONS.search}</a></div>`;
+  return `<div class="top"><h1>${esc(title)}</h1><span class="top-btns"><a class="icon-btn" href="#/remote" aria-label="Remote">${ICONS.remote}</a><a class="icon-btn" href="#/search" aria-label="Search all titles">${ICONS.search}</a></span></div>`;
 }
 
 // undo: optional function; shows an Undo button and keeps the toast up longer.
@@ -585,6 +586,8 @@ async function route() {
     if (p0 === 'good' && p1 === 'step' && p2) return await screenGoodStep(rid, p2);
     if (p0 === 'good' && p1 === 'results') return await screenGoodResults(rid);
     if (p0 === 'good') { goodStart(); return; }
+    if (p0 === 'remote' && p1 === 'calibrate') return await screenCalibrate(rid);
+    if (p0 === 'remote') return await screenRemote(rid);
     if (p0 === 'search') return await screenSearch(rid);
     if (p0 === 'title' && p1 && p2) return await screenTitle(rid, p1, p2);
     if (p0 === 'person' && p1) return await screenPerson(rid, p1);

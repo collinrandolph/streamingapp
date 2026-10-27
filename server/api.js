@@ -652,6 +652,7 @@ async function studio(id, withAvail = false) {
 const helpers = { db, tmdb, DAY, today, shortDate, summarize, withListFlags, availabilityFor, myFamilySet, providerFamilies, details, creditsOf, person, collection, studio, yearOf };
 const tracking = require('./tracking')(helpers);
 const good = require('./good')(helpers);
+const roku = require('./roku');
 
 // ---------- Router ----------
 
@@ -694,6 +695,17 @@ async function handle(method, path, query, body) {
     });
   }
   if (method === 'GET' && a === 'find' && (b === 'person' || b === 'company')) return good.find(b, query.get('q'));
+  if (a === 'roku') {
+    if (method === 'GET' && !b) return roku.status();
+    if (method === 'POST' && b === 'setup') return roku.setup(body || {});
+    if (method === 'POST' && b === 'find') return roku.find();
+    if (method === 'POST' && b === 'key') return roku.key(body || {});
+    if (method === 'POST' && b === 'text') return roku.text(body || {});
+    if (method === 'POST' && b === 'calibration') return roku.saveCalibration(body || {});
+    if (method === 'POST' && b === 'calibration-clear') return roku.clearCalibration();
+    if (method === 'POST' && b === 'open-search') return roku.openBySearch(body || {});
+    if (method === 'POST' && b === 'log-clear') return roku.clearLog();
+  }
   throw Object.assign(new Error('Not found'), { status: 404 });
 }
 
