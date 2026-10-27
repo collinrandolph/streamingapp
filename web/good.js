@@ -134,17 +134,16 @@ function stepBody(step, a) {
     <div class="panel">${sw('awards', 'Award winners and nominees', 'Oscars, Emmys, Golden Globes, BAFTAs and more')}${sw('cult', 'Cult classics', 'Tagged as cult films')}${sw('trending', 'Trending', 'Popular this week')}</div>`;
 }
 
-// "Surprise me" while a step is left open, "Continue" once it's narrowed, "Show results" on the last step.
+// "Surprise me" only while nothing on the step is selected; "Continue" otherwise; "Show results" on the last step.
+// Movies or shows and Where always have something selected (they can't be left empty), so they say Continue.
 function nextLabel(step, a, last) {
   if (last) return 'Show results';
-  const narrowed = {
-    kinds: a.kinds.length === 1,
-    genres: a.genres.length > 0,
-    keywords: a.keywords.length > 0,
-    years: a.years.preset !== 'any',
-    services: a.services !== null && a.services.length < myServiceList().length
+  const nothingSelected = {
+    genres: a.genres.length === 0,
+    keywords: a.keywords.length === 0,
+    years: a.years.preset === 'any'
   }[step];
-  return narrowed ? 'Continue' : 'Surprise me';
+  return nothingSelected ? 'Surprise me' : 'Continue';
 }
 function stepBlocked(step, a) {
   if (step === 'kinds' && !a.kinds.length) return 'Pick movies, shows or both.';

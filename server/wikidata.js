@@ -29,7 +29,8 @@ async function fetchBatch(batch) {
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/sparql-results+json', 'user-agent': UA },
-    body: 'query=' + encodeURIComponent(query(movieIds, tvIds))
+    body: 'query=' + encodeURIComponent(query(movieIds, tvIds)),
+    signal: AbortSignal.timeout(10000) // a slow Wikidata only costs the award reasons, never the results
   });
   if (!res.ok) throw new Error('Wikidata ' + res.status);
   const rows = (await res.json()).results.bindings;
@@ -52,14 +53,17 @@ async function notability(items) {
     if (c && Date.now() - c.fetched_at < TTL) result.set(x.kind + ':' + x.id, JSON.parse(c.body));
     else missing.push(x);
   }
-  for (let i = 0; i < missing.length; i += BATCH) {
+  const batches = [];
+  for (let i = 0; i < missing.length; i += BATCH) batches.push(missing.slice(i, i + BATCH));
+  // Batches run side by side, so a slow Wikidata adds at most one timeout, not one per batch.
+  await Promise.all(batches.map(async (batch) => {
     try {
-      const got = await fetchBatch(missing.slice(i, i + BATCH));
+      const got = await fetchBatch(batch);
       for (const [k, v] of got) { result.set(k, v); writeCache.run('wd:' + k, JSON.stringify(v), Date.now()); }
     } catch (e) {
       // Wikidata is slow or busy: these titles just go without notability this time.
     }
-  }
+  }));
   return result;
 }
 
