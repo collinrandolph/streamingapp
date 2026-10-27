@@ -267,8 +267,10 @@ async function screenGoodResults(rid) {
     const d = await api('/good?' + goodQuery(a));
     if (rid !== state.renderId) return;
     state.goodItems = d.items;
+    state.goodPage = d.page;
     document.getElementById('good-results').innerHTML = d.items.length
-      ? `<h2 class="sec" style="font-size:16px">Results <span class="count">${d.items.length}</span></h2><div class="grid">${d.items.map((t) => card({ ...t, sub: t.reason })).join('')}</div>`
+      ? `<h2 class="sec" style="font-size:16px">Results <span class="count" id="good-count">${d.items.length}</span></h2><div class="grid" id="good-grid">${d.items.map((t) => card({ ...t, sub: t.reason })).join('')}</div>
+        <div class="pad" style="margin:18px 0 6px"><button class="btn-secondary" id="good-more" data-act="gs-more" ${d.hasMore ? '' : 'hidden'}>Show more</button></div>`
       : '<p class="empty" style="margin-top:12px">Nothing matches. Tap a filter above to loosen it: a lower rating, more years, or fewer sub-genres.</p>';
   } catch (e) { if (rid === state.renderId) document.getElementById('good-results').innerHTML = errorHtml(e); }
 }
@@ -366,6 +368,29 @@ document.addEventListener('click', async (ev) => {
     if (act === 'gs-back') { const steps = goodSteps(a); const i = steps.indexOf(step); if (i > 0) location.hash = '#/good/step/' + steps[i - 1]; return; }
     if (act === 'gs-results') { saveGs(); location.hash = '#/good/results'; return; }
     if (act === 'gs-pick3') return renderPick3();
+    if (act === 'gs-more') {
+      // The next page reaches deeper into TMDb; titles already on screen stay put and new ones are added below.
+      el.disabled = true;
+      el.textContent = 'Loading more…';
+      const rid = state.renderId;
+      const qs = goodQuery(a) + '&page=' + ((state.goodPage || 1) + 1);
+      try {
+        const d = await api('/good?' + qs);
+        if (rid !== state.renderId) return;
+        const shown = new Set(state.goodItems.map((t) => t.kind + ':' + t.id));
+        const fresh = d.items.filter((t) => !shown.has(t.kind + ':' + t.id));
+        state.goodItems = state.goodItems.concat(fresh);
+        state.goodPage = d.page;
+        document.getElementById('good-grid').insertAdjacentHTML('beforeend', fresh.map((t) => card({ ...t, sub: t.reason })).join(''));
+        document.getElementById('good-count').textContent = state.goodItems.length;
+        el.hidden = !d.hasMore || !fresh.length;
+        if (!fresh.length) toast("That's everything for these filters.");
+      } finally {
+        el.disabled = false;
+        el.textContent = 'Show more';
+      }
+      return;
+    }
 
     if (act === 'gs-profile') {
       const p = state.goodProfiles.find((x) => x.id === Number(el.dataset.id));

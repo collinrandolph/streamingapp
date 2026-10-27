@@ -100,7 +100,8 @@ module.exports = function good(h) {
   }
 
   // The candidate pool: titles on the chosen services (plus rentals if switched on) matching the filters.
-  async function candidates(q, genreList, s) {
+  // depth grows with each Show more: more TMDb pages per sort, so the pool reaches further down.
+  async function candidates(q, genreList, s, depth) {
     const fams = await h.providerFamilies();
     const mine = h.myFamilySet();
     const chosen = q.services && q.services.length ? new Set(q.services.filter((f) => mine.has(f))) : mine;
@@ -127,12 +128,15 @@ module.exports = function good(h) {
       if (q.person) base += '&with_people=' + Number(q.person);
       const narrow = q.person || q.studio || (q.keywords && q.keywords.length) || q.from;
       const floor = narrow ? 20 : 100;
-      calls.push([kind, `/discover/${kind}?sort_by=vote_count.desc&vote_count.gte=${floor}${base}`]);
-      calls.push([kind, `/discover/${kind}?sort_by=vote_count.desc&vote_count.gte=${floor}&page=2${base}`]);
-      calls.push([kind, `/discover/${kind}?sort_by=vote_average.desc&vote_count.gte=${s.minVotes}${base}`]);
-      calls.push([kind, `/discover/${kind}?sort_by=popularity.desc&vote_count.gte=${floor}${base}`]);
+      const sorts = [[`sort_by=vote_count.desc&vote_count.gte=${floor}`, 2 * depth], [`sort_by=vote_average.desc&vote_count.gte=${s.minVotes}`, depth], [`sort_by=popularity.desc&vote_count.gte=${floor}`, depth]];
+      for (const [sort, n] of sorts) for (let p = 1; p <= n; p++) calls.push([kind, `/discover/${kind}?${sort}&page=${p}${base}`, p === n]);
     }
-    const pages = await Promise.all(calls.map(([kind, path]) => tmdb.get(path, DAY).then((r) => (r.results || []).map((x) => ({ ...x, kind }))).catch(() => [])));
+    // more: whether any sort has pages beyond the ones fetched, so Show more can reach further.
+    let more = false;
+    const pages = await Promise.all(calls.map(([kind, path, last]) => tmdb.get(path, DAY).then((r) => {
+      if (last && (r.page || 1) < (r.total_pages || 1)) more = true;
+      return (r.results || []).map((x) => ({ ...x, kind }));
+    }).catch(() => [])));
     const out = new Map();
     for (const x of pages.flat()) out.set(x.kind + ':' + x.id, x);
     if (q.person && (!q.kinds || !q.kinds.length || q.kinds.includes('tv'))) {
@@ -149,7 +153,7 @@ module.exports = function good(h) {
         out.set('tv:' + x.id, { ...x, kind: 'tv' });
       }
     }
-    return [...out.values()];
+    return { pool: [...out.values()], more };
   }
 
   function awardReason(n) {
@@ -172,7 +176,8 @@ module.exports = function good(h) {
     const min = q.min != null && !Number.isNaN(Number(q.min)) ? Number(q.min) : 7.5;
     const ways = { awards: q.awards !== false, cult: q.cult !== false, trending: q.trending !== false };
     const genreList = await genres();
-    let pool = await candidates(q, genreList, s);
+    const depth = Math.min(Math.max(Number(q.page) || 1, 1), 10);
+    let { pool, more } = await candidates(q, genreList, s, depth);
     const onList = new Set(db.prepare('SELECT kind, tmdb_id FROM library').all().map((r) => r.kind + ':' + r.tmdb_id));
     pool = pool.filter((x) => !onList.has(x.kind + ':' + x.id));
 
@@ -208,9 +213,11 @@ module.exports = function good(h) {
       });
     }
     picked.sort((a, b) => b.rank - a.rank);
-    let items = await h.availabilityFor(picked.slice(0, 60));
+    // Each page adds 60. Earlier pages' availability is already cached, so only the new titles cost a lookup.
+    const limit = depth * 60;
+    let items = await h.availabilityFor(picked.slice(0, limit));
     items = items.filter((x) => !x.faded || (s.rentals && x.anyOffer));
-    return { items: h.withListFlags(items), rentals: s.rentals };
+    return { items: h.withListFlags(items), rentals: s.rentals, page: depth, hasMore: picked.length > limit || more };
   }
 
   // Saved searches ("Date night", "Learning"): a name plus the guided flow's answers.

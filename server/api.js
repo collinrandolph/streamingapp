@@ -678,7 +678,7 @@ async function handle(method, path, query, body) {
   if (method === 'GET' && a === 'good') {
     return good.list({
       kinds: (query.get('kinds') || '').split(',').filter(Boolean), genres: (query.get('genres') || '').split(',').filter(Boolean), keywords: (query.get('keywords') || '').split(',').filter(Boolean).map(Number), leave: (query.get('leave') || '').split(',').filter(Boolean),
-      services: (query.get('services') || '').split(',').filter(Boolean), from: query.get('from'), to: query.get('to'), min: query.get('min'),
+      services: (query.get('services') || '').split(',').filter(Boolean), from: query.get('from'), to: query.get('to'), min: query.get('min'), page: query.get('page'),
       awards: query.get('awards') !== '0', cult: query.get('cult') !== '0', trending: query.get('trending') !== '0',
       person: query.get('person'), studio: query.get('studio')
     });
