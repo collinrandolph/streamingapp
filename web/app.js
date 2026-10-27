@@ -11,7 +11,20 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const img = (p, size) => (p ? IMG + size + p : '');
 const initials = (name) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('');
 
+// Data requests are answered by the copy of the data code running in this page (web/core.js), so the app
+// works with the PC off. Roku requests go to the PC, which this page can only call when it came from the PC.
 async function api(path, body) {
+  if (path.startsWith('/roku')) return pcApi(path, body);
+  const url = new URL('/api' + path, location.origin);
+  try {
+    return await state.core.handle(body ? 'POST' : 'GET', url.pathname, url.searchParams, body || null);
+  } catch (e) {
+    throw Object.assign(new Error(e.message || 'Something went wrong'), { status: e.status || 500 });
+  }
+}
+
+async function pcApi(path, body) {
+  if (!state.pc) throw Object.assign(new Error("The remote works from your PC's address. Set it in Settings, then use Watch on TV."), { status: 409 });
   const res = await fetch('/api' + path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed (' + res.status + ')'), { status: res.status });
@@ -68,6 +81,7 @@ const ICONS = {
   following: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg>',
   services: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
   good: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
+  gear: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   tv: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   remote: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="5"/><circle cx="12" cy="8" r="2"/><path d="M10 14h.01M14 14h.01M10 17h.01M14 17h.01"/></svg>',
   search: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>'
@@ -82,7 +96,11 @@ function renderNav(current, show) {
 }
 
 function header(title) {
-  return `<div class="top"><h1>${esc(title)}</h1><span class="top-btns"><a class="icon-btn" href="#/remote" aria-label="Remote">${ICONS.remote}</a><a class="icon-btn" href="#/search" aria-label="Search all titles">${ICONS.search}</a></span></div>`;
+  // The remote runs on the PC: a link here when this page came from the PC, otherwise a new tab on the PC's address.
+  const pc = typeof pcUrl === 'function' ? pcUrl() : '';
+  const remote = state.pc ? `<a class="icon-btn" href="#/remote" aria-label="Remote">${ICONS.remote}</a>`
+    : pc ? `<a class="icon-btn" href="${esc(pc)}/#/remote" target="_blank" rel="noopener" aria-label="Remote, on your PC">${ICONS.remote}</a>` : '';
+  return `<div class="top"><h1>${esc(title)}</h1><span class="top-btns">${remote}<a class="icon-btn" href="#/settings" aria-label="Settings">${ICONS.gear}</a><a class="icon-btn" href="#/search" aria-label="Search all titles">${ICONS.search}</a></span></div>`;
 }
 
 // undo: optional function; shows an Undo button and keeps the toast up longer.
@@ -124,9 +142,9 @@ function openManageSheet(u) {
 
 function errorHtml(e) {
   if (e.status === 503) {
-    return `<div class="error"><strong>No TMDb key yet.</strong><br>Create a free account at themoviedb.org, request an API key under Settings › API, then save the API Read Access Token in <code>config.local.json</code> in the project folder as <code>{"tmdbToken": "…"}</code>, then reload this page.</div>`;
+    return `<div class="error"><strong>No TMDb key yet.</strong><br>Add your TMDb API Read Access Token in <a href="#/settings">Settings</a>. Get one free at themoviedb.org under Settings › API. Or open the app once from your PC's address and it will take the PC's key.</div>`;
   }
-  if (e.status === 401) return `<div class="error"><strong>TMDb rejected the key.</strong> Check the token in config.local.json.</div>`;
+  if (e.status === 401) return `<div class="error"><strong>TMDb rejected the key.</strong> Check the token in <a href="#/settings">Settings</a>.</div>`;
   return `<div class="error">${esc(e.message)}</div>`;
 }
 
@@ -554,6 +572,17 @@ async function screenStudio(rid, id) {
     ${gridSection('Movies', s.movies)}${gridSection('Shows', s.shows)}`;
 }
 
+// The remote and calibration run on the PC; from the hosted app they open there.
+function screenRemoteElsewhere() {
+  renderNav(null, true);
+  const pc = pcUrl();
+  $view.innerHTML = `<a class="back" href="javascript:history.back()">‹ Back</a>
+    <div class="pad"><h1 style="margin:4px 0 8px;font-size:26px">Remote</h1>
+    <p class="hint" style="margin:0 0 14px">The remote and calibration run on your PC, which talks to the TV. They need the PC on and this phone on the same Wi-Fi.</p>
+    ${pc ? `<a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="${esc(pc)}/#/remote" target="_blank" rel="noopener">Open the remote on your PC</a>`
+      : '<a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/settings">Add your PC in Settings</a>'}</div>`;
+}
+
 // ---------- Router ----------
 
 async function route() {
@@ -561,6 +590,10 @@ async function route() {
   const rid = ++state.renderId;
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   try {
+    // The PC helper page and Settings work before anything else is set up.
+    if ((parts[0] || '').startsWith('bridge-done')) return await screenBridgeDone();
+    if ((parts[0] || '').startsWith('bridge')) return await screenBridge();
+    if (parts[0] === 'settings') return await screenSettings(rid);
     if (!state.status) state.status = await api('/status');
     if (!state.status.hasKey) {
       renderNav(null, false);
@@ -587,6 +620,7 @@ async function route() {
     if (p0 === 'good' && p1 === 'step' && p2) return await screenGoodStep(rid, p2);
     if (p0 === 'good' && p1 === 'results') return await screenGoodResults(rid);
     if (p0 === 'good') { goodStart(); return; }
+    if (p0 === 'remote' && !state.pc) return screenRemoteElsewhere();
     if (p0 === 'remote' && p1 === 'calibrate') return await screenCalibrate(rid);
     if (p0 === 'remote') return await screenRemote(rid);
     if (p0 === 'search') return await screenSearch(rid);
@@ -711,6 +745,14 @@ document.addEventListener('click', async (ev) => {
     }
 
     // Watch on TV: replay the calibrated search path with this title; the TV stops on Roku's page for it.
+    if (act === 'watch-tv' && !state.pc) {
+      // Hosted app: a PC page does the pressing, then closes.
+      if (!pcUrl()) {
+        return openSheet(`<h2>Watch on TV needs your PC</h2><p>Add your PC's address in Settings. When you tap Watch on TV, a page on your PC opens for a moment and sends the title to the TV.</p><div class="stack"><a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/settings">Open Settings</a></div>`);
+      }
+      el.innerHTML = ICONS.tv + 'Opening on TV…';
+      return goToBridge('tv', { title: el.dataset.title });
+    }
     if (act === 'watch-tv') {
       const s = await api('/roku');
       if (!s.device) {
@@ -828,5 +870,46 @@ document.addEventListener('input', (ev) => {
   }
 });
 
-window.addEventListener('hashchange', route);
-route();
+// Start the data code, check whether this page came from the PC, then show the first screen.
+async function startApp() {
+  $view.innerHTML = '<p class="loading">Starting…</p>';
+  try {
+    const bridge = location.hash.startsWith('#/bridge?');
+    const [core, ping] = await Promise.all([
+      bridge ? null : bootCore(),
+      fetch('api/ping').then((r) => (r.ok ? r.json() : null)).catch(() => null)
+    ]);
+    state.core = core;
+    state.pc = !!(ping && ping.pc);
+    if (state.pc && core) await adoptPc();
+    // Offline support needs a secure address (the hosted app, or localhost); the PC's http address can't have it.
+    if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+  } catch (e) {
+    $view.innerHTML = errorHtml(e);
+    return;
+  }
+  window.addEventListener('hashchange', route);
+  route();
+}
+
+// Opened from the PC: remember its address, take its keys if this device has none, and the first time,
+// bring over the list the PC already has.
+async function adoptPc() {
+  const core = state.core;
+  const set = core.settings();
+  const patch = { pcUrl: location.origin };
+  if (!set.tmdbToken) {
+    const keys = await pcApi('/keys').catch(() => null);
+    if (keys) Object.assign(patch, { tmdbToken: keys.tmdbToken || '', omdbKey: keys.omdbKey || set.omdbKey || '' });
+  }
+  core.saveSettings(patch);
+  if (core.isEmpty() && !set.importedFromPc) {
+    const data = await pcApi('/export');
+    await core.handle('POST', '/api/import', new URLSearchParams(), data);
+    core.saveSettings({ importedFromPc: Date.now() });
+    core.flush();
+  }
+  state.status = null;
+}
+
+startApp();

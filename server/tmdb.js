@@ -44,7 +44,14 @@ async function get(pathAndQuery, ttl) {
   await acquire();
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const res = await fetch(url, { headers });
+      let res;
+      try {
+        res = await fetch(url, { headers });
+      } catch (e) {
+        // Offline or TMDb unreachable: an older copy beats an error page.
+        if (cached) return JSON.parse(cached.body);
+        throw Object.assign(new Error("Can't reach TMDb. Check your connection."), { status: 502 });
+      }
       if (res.status === 429) {
         const wait = Number(res.headers.get('retry-after')) || 1;
         await new Promise((r) => setTimeout(r, wait * 1000));

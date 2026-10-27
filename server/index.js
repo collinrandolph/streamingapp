@@ -4,9 +4,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const api = require('./api');
+const config = require('./config');
 
 const PORT = Number(process.env.PORT) || 8787;
 const WEB = path.join(__dirname, '..', 'web');
+// The data code the browser runs too; served at /core/ (GitHub Pages gets the same files there).
+const CORE_FILES = ['api.js', 'tmdb.js', 'tracking.js', 'good.js', 'wikidata.js', 'schema.js'];
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -50,6 +53,21 @@ function serveStatic(res, pathname) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  // Lets a page tell it was served by the PC, which can reach the Roku.
+  if (url.pathname === '/api/ping') return sendJson(res, 200, { pc: true });
+  // The app keeps its own copy of the keys; opened from the PC, it takes them from config.local.json.
+  if (url.pathname === '/api/keys') {
+    const c = config.load();
+    return sendJson(res, 200, { tmdbToken: c.tmdbToken || '', omdbKey: c.omdbKey || '' });
+  }
+  const core = url.pathname.match(/^\/core\/([a-z]+\.js)$/);
+  if (core && CORE_FILES.includes(core[1])) {
+    return fs.readFile(path.join(__dirname, core[1]), (err, buf) => {
+      if (err) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'content-type': TYPES['.js'], 'cache-control': 'no-cache' });
+      res.end(buf);
+    });
+  }
   if (url.pathname.startsWith('/api/')) {
     try {
       const body = req.method === 'POST' ? await readJson(req) : null;

@@ -26,12 +26,17 @@ function query(movieIds, tvIds) {
 async function fetchBatch(batch) {
   const movieIds = batch.filter((x) => x.kind === 'movie').map((x) => x.id);
   const tvIds = batch.filter((x) => x.kind === 'tv').map((x) => x.id);
-  const res = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/sparql-results+json', 'user-agent': UA },
-    body: 'query=' + encodeURIComponent(query(movieIds, tvIds)),
-    signal: AbortSignal.timeout(10000) // a slow Wikidata only costs the award reasons, never the results
-  });
+  const q = query(movieIds, tvIds);
+  const signal = AbortSignal.timeout(10000); // a slow Wikidata only costs the award reasons, never the results
+  // In a browser, a plain GET with no custom headers avoids a CORS preflight; the PC sends its user agent.
+  const res = typeof window !== 'undefined'
+    ? await fetch(ENDPOINT + '?format=json&query=' + encodeURIComponent(q), { signal })
+    : await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/sparql-results+json', 'user-agent': UA },
+      body: 'query=' + encodeURIComponent(q),
+      signal
+    });
   if (!res.ok) throw new Error('Wikidata ' + res.status);
   const rows = (await res.json()).results.bindings;
   const out = new Map(batch.map((x) => [x.kind + ':' + x.id, { wins: [], noms: [], cult: false }]));

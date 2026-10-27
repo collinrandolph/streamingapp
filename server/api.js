@@ -654,12 +654,52 @@ const tracking = require('./tracking')(helpers);
 const good = require('./good')(helpers);
 const roku = require('./roku');
 
+// ---------- Backup ----------
+// Your data, not the API cache: for backups, and for moving it between the PC and the phone.
+// Roku settings and calibration stay with the PC, which is the one that talks to the TV.
+const BACKUP_TABLES = ['services', 'library', 'tracked_title', 'track_rule', 'follow', 'update_seen', 'good_profile'];
+const BACKUP_SETTINGS = ['good'];
+
+function exportData() {
+  const out = { app: 'streaming-tracker', version: 1, exportedAt: Date.now(), tables: {} };
+  for (const t of BACKUP_TABLES) out.tables[t] = db.prepare('SELECT * FROM ' + t).all().map((row) => ({ ...row }));
+  out.settings = db.prepare(`SELECT key, value FROM settings WHERE key IN (${BACKUP_SETTINGS.map(() => '?').join(', ')})`).all(...BACKUP_SETTINGS).map((row) => ({ ...row }));
+  return out;
+}
+
+// Replaces your data with a backup's.
+function importData(b) {
+  if (!b || b.app !== 'streaming-tracker' || !b.tables) throw Object.assign(new Error("That isn't a Streaming Tracker backup."), { status: 400 });
+  db.exec('BEGIN');
+  try {
+    for (const t of BACKUP_TABLES) {
+      const rows = b.tables[t];
+      if (!Array.isArray(rows)) continue;
+      db.exec('DELETE FROM ' + t);
+      for (const row of rows) {
+        const cols = Object.keys(row).filter((c) => /^[a-z_]+$/.test(c));
+        db.prepare(`INSERT INTO ${t} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((c) => row[c]));
+      }
+    }
+    for (const st of b.settings || []) {
+      if (BACKUP_SETTINGS.includes(st.key)) db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(st.key, st.value);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return { imported: Object.fromEntries(BACKUP_TABLES.map((t) => [t, (b.tables[t] || []).length])) };
+}
+
 // ---------- Router ----------
 
 async function handle(method, path, query, body) {
   const parts = path.split('/').filter(Boolean).slice(1);
   const [a, b, c, d] = parts;
   if (method === 'GET' && a === 'status') return status();
+  if (method === 'GET' && a === 'export') return exportData();
+  if (method === 'POST' && a === 'import') return importData(body);
   if (method === 'GET' && a === 'providers') return providers();
   if (method === 'POST' && a === 'services') return saveServices(body || {});
   if (method === 'GET' && a === 'service' && b) return servicePage(decodeURIComponent(b));

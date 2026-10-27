@@ -291,3 +291,6 @@ h2.sec.acc { margin: 14px 8px 6px; font-size: 16px; }
 .cal-actions .skip { min-height: 46px; padding: 0 12px; font-weight: 600; color: var(--muted); }
 .tv-btn { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
 .tv-btn[disabled] { opacity: .6; }
+.bridge { padding: 48px 24px; text-align: center; }
+.bridge h1 { margin: 0 0 10px; font-size: 24px; }
+.bridge p { margin: 0; color: var(--text-2); line-height: 1.5; }
