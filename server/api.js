@@ -185,9 +185,10 @@ function normalizePos(seasons, s, e) {
 
 // Where a started show stands, worked out from TMDb data. You set your place; the app works out the state.
 //   watching: aired episodes left to watch                          → Watching
-//   waiting:  none left, but more are announced (dated or not)      → Watching
-//   caught:   you've seen everything that exists or is announced    → Caught up
-//   done:     as caught, and the show has ended or been canceled    → Finished (set automatically)
+//   waiting:  none left, but the next episode has an air date       → Watching
+//   caught:   none left and nothing scheduled (a season may be
+//             announced without dates)                              → Caught up
+//   done:     none left and the show has ended or been canceled     → Finished (set automatically)
 function progressOf(d, s, e) {
   const seasons = seasonsOf(d);
   const unwatched = unwatchedFrom(seasons, s, e);
@@ -202,11 +203,11 @@ function progressOf(d, s, e) {
   }
   const ended = d.status === 'Ended' || d.status === 'Canceled';
   if (!ended) {
-    // Announced but not dated: a listed season with nothing aired, or more episodes listed than have aired.
+    // Announced but not scheduled still counts as Caught up; the line says what's coming.
     const newSeason = seasons.find((x) => x.aired === 0 && (x.n > s || (x.n === s && e === 1)));
-    if (newSeason) return { state: 'waiting', label: 'Watching', premiere: true, season: newSeason.n, line: `Season ${newSeason.n} announced, no date yet` };
+    if (newSeason) return { state: 'caught', label: 'Caught up', premiere: true, season: newSeason.n, line: `Season ${newSeason.n} announced, no date yet` };
     const more = seasons.find((x) => x.aired > 0 && x.count > x.aired);
-    if (more) return { state: 'waiting', label: 'Watching', line: `More of Season ${more.n} coming, no date yet` };
+    if (more) return { state: 'caught', label: 'Caught up', line: `More of Season ${more.n} announced, no date yet` };
     return { state: 'caught', label: 'Caught up', line: 'No new episodes announced' };
   }
   return { state: 'done', label: 'Finished', line: 'The show has ended' };
@@ -518,7 +519,7 @@ async function watching() {
         const na = d.next_episode_to_air;
         if (na && na.air_date && na.air_date >= t && na.air_date <= in10) {
           coming.push({ ...base, line: 'S' + na.season_number + 'E' + na.episode_number + ' · ' + shortDate(na.air_date), date: na.air_date });
-        } else if (p.state === 'waiting' && p.premiere) {
+        } else if (p.premiere) {
           // A new season you're waiting on: announced, or premiering more than 10 days out.
           updates.push({ ...base, line: p.line, date: p.date || '9999' });
         }
