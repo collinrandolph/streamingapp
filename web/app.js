@@ -24,6 +24,7 @@ const state = {
   status: null,
   setup: JSON.parse(sessionStorage.getItem('setup') || 'null'), // { queue: [families], idx, firstRun }
   selected: null, // families picked on the setup screen
+  updates: {}, // Updates entries by "kind:id", for the Manage updates sheet
   renderId: 0
 };
 function saveSetup() {
@@ -82,11 +83,13 @@ function header(title) {
   return `<div class="top"><h1>${esc(title)}</h1><a class="icon-btn" href="#/search" aria-label="Search all titles">${ICONS.search}</a></div>`;
 }
 
-function toast(text) {
-  $toast.textContent = text;
+// undo: optional function; shows an Undo button and keeps the toast up longer.
+function toast(text, undo) {
+  state.undo = undo || null;
+  $toast.innerHTML = `<span>${esc(text)}</span>${undo ? '<button class="toast-undo" data-act="undo">Undo</button>' : ''}`;
   $toast.hidden = false;
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => { $toast.hidden = true; }, 3200);
+  toast.t = setTimeout(() => { $toast.hidden = true; state.undo = null; }, undo ? 6000 : 3200);
 }
 
 function openSheet(html) {
@@ -94,6 +97,38 @@ function openSheet(html) {
   $sheet.hidden = false;
 }
 function closeSheet() { $sheet.hidden = true; $sheet.innerHTML = ''; }
+
+function followBtn(type, x) {
+  return `<button class="btn-outline follow" style="width:auto;min-height:40px;padding:0 18px" data-act="follow-toggle" data-type="${type}" data-id="${x.id}" data-name="${esc(x.name)}" data-image="${esc(x.photo || x.poster || x.logo || '')}" aria-pressed="${x.following}">${x.following ? '✓ Following' : 'Follow'}</button>`;
+}
+const FOLLOW_KIND = { person: 'Person', collection: 'Franchise', studio: 'Studio' };
+
+// One Updates entry: the title, its single reason, and what you can do with it.
+function updateRow(u) {
+  state.updates[u.kind + ':' + u.id] = u;
+  const data = `data-kind="${u.kind}" data-id="${u.id}" data-name="${esc(u.name)}" data-poster="${esc(u.poster || '')}" data-year="${esc(u.year || '')}"`;
+  return `<div class="upd">${rowCard(u, u.sub, `<span class="reason">${esc(u.reason)}</span>`)}
+    <div class="row-actions"><button class="chip" data-act="upd-add" ${data}>+ My List</button><button class="chip" data-act="upd-dismiss" ${data}>Dismiss</button><button class="chip" data-act="upd-manage" data-key="${u.kind}:${u.id}">Manage updates</button></div></div>`;
+}
+
+async function openTrackSheet() {
+  const t = state.title;
+  const o = await api('/track/' + t.kind + '/' + t.id);
+  state.trackItems = o.items;
+  openSheet(`<h2>Track ${esc(t.name)}</h2>
+    <p>New titles from what you tick appear in Updates on Watching. Franchise, ${t.kind === 'tv' ? 'creator' : 'director'} and top cast start ticked.</p>
+    <div class="panel">${o.items.map((it, i) => `<button class="item" data-act="track-tick" data-i="${i}" role="checkbox" aria-checked="${it.on}"><span class="l"><span class="t">${esc(it.label)}</span><span class="s">${esc(it.role)}</span></span><span class="box">${it.on ? '✓' : ''}</span></button>`).join('')}</div>
+    <div class="stack" style="margin-top:14px"><button class="btn-primary" data-act="track-save">${o.tracked ? 'Save' : 'Start tracking'}</button>${o.tracked ? '<button class="btn-secondary" data-act="track-stop">Stop tracking</button>' : ''}</div>`);
+}
+
+function openManageSheet(u) {
+  state.refreshOnClose = true;
+  openSheet(`<h2>Manage updates</h2>
+    <p>Every rule that brought ${esc(u.name)} here. Turning one off stops all its updates.</p>
+    <div class="panel">${u.reasons.map((r) => r.rule
+      ? `<button class="item" data-act="rule-toggle" data-kind="${r.rule.kind}" data-id="${r.rule.id}" data-type="${r.rule.type}" data-target="${r.rule.target}" role="switch" aria-checked="true"><span class="l"><span class="t">${esc(r.label)}</span><span class="s">Tracking rule</span></span><span class="sw" aria-checked="true"></span></button>`
+      : `<button class="item" data-act="follow-toggle" data-type="${r.follow.type}" data-id="${r.follow.id}" data-name="${esc(r.follow.name)}" role="switch" aria-checked="true"><span class="l"><span class="t">${esc(r.label)}</span><span class="s">Following · ${FOLLOW_KIND[r.follow.type]}</span></span><span class="sw" aria-checked="true"></span></button>`).join('')}</div>`);
+}
 
 function errorHtml(e) {
   if (e.status === 503) {
@@ -187,7 +222,23 @@ async function screenWatching(rid) {
     ${w.coming.length ? `<div class="pad"><div class="panel">${w.coming.map((c) => `<a class="item" href="#/title/${c.kind}/${c.id}"><span class="l"><span class="t">${esc(c.name)}</span><span class="s">${esc(c.line)}</span></span>${badgeHtml(c.badge, 0)}</a>`).join('')}</div></div>` : '<p class="empty">Nothing scheduled in the next 10 days.</p>'}
     <div style="margin:28px 16px 0;border-top:1px solid var(--line)"></div>
     <h2 class="sec">Updates</h2>
-    <p class="empty">New titles from what you track will appear here. Tracking arrives in the next version.</p>`;
+    ${w.updates.length ? `<h3 class="sub-sec">New seasons</h3><div class="pad"><div class="panel">${w.updates.map((u) => `<a class="item" href="#/title/${u.kind}/${u.id}"><span class="l"><span class="t">${esc(u.name)}</span><span class="s">${esc(u.line)}</span></span>${badgeHtml(u.badge, 0)}</a>`).join('')}</div></div>` : ''}
+    <div id="updates"><p class="loading">Checking what you track…</p></div>`;
+  loadUpdates(rid, w.updates.length > 0);
+}
+
+async function loadUpdates(rid, hasSeasons) {
+  const box = document.getElementById('updates');
+  try {
+    const f = await api('/updates');
+    if (rid !== state.renderId) return;
+    state.updates = {};
+    if (!f.groups.length) {
+      box.innerHTML = hasSeasons ? '' : `<p class="empty">${f.hasRules ? 'Nothing new from what you track in the last 90 days.' : 'Track a title or follow a person, franchise or studio, and their new releases appear here. New seasons of shows you\'re caught up on show up here too.'}</p>`;
+      return;
+    }
+    box.innerHTML = f.groups.map((g) => `<h3 class="sub-sec">${esc(g.label)} <span class="count">${g.items.length}</span></h3><div class="pad">${g.items.map(updateRow).join('')}</div>`).join('');
+  } catch (e) { box.innerHTML = errorHtml(e); }
 }
 
 async function screenMyList(rid) {
@@ -196,15 +247,15 @@ async function screenMyList(rid) {
   const data = await api('/mylist');
   if (rid !== state.renderId) return;
   const seg = (t) => {
-    const opts = t.kind === 'tv' ? [['active', 'Active'], ['none', 'No status'], ['finished', 'Finished']] : [['none', 'Not watched'], ['finished', 'Finished']];
+    const opts = t.kind === 'tv' ? [['none', 'Not started'], ['active', t.group === 'caught' ? 'Caught up' : 'Watching'], ['finished', 'Finished']] : [['none', 'Not started'], ['finished', 'Finished']];
     return `<div class="seg" role="group" aria-label="Status of ${esc(t.name)}">${opts.map(([k, l]) => `<button data-act="set-status" data-kind="${t.kind}" data-id="${t.id}" data-status="${k}" aria-pressed="${t.status === k}">${l}</button>`).join('')}</div>`;
   };
-  $view.innerHTML = header('My List') + `<p class="hint">Active first, then no status, then Finished.</p>` +
+  $view.innerHTML = header('My List') + `<p class="hint">Watching: episodes left, aired or dated. Caught up: you've seen everything aired and the next season isn't out. Finished: done for good.</p>` +
     (data.groups.length ? data.groups.map((g) => `<h2 class="sec" style="font-size:16px">${esc(g.label)} <span class="count">${g.items.length}</span></h2>
       <div class="pad">${g.items.map((t) => `<div style="background:var(--surface);border-radius:12px;padding:10px;margin-bottom:10px">
         <a href="#/title/${t.kind}/${t.id}" style="display:flex;gap:12px;align-items:center;color:inherit" class="${t.faded ? 'faded' : ''}">
           <span class="thumb" style="width:40px;flex:0 0 40px;aspect-ratio:2/3;border-radius:6px;overflow:hidden;background:var(--surface-2);${t.faded ? 'opacity:.45;filter:grayscale(1)' : ''}">${t.poster ? `<img src="${img(t.poster, 'w92')}" alt="" style="width:100%;height:100%;object-fit:cover">` : ''}</span>
-          <span style="display:flex;flex-direction:column;gap:4px;min-width:0"><span style="font-size:15px;font-weight:600">${esc(t.name)}</span><span style="font-size:12px;color:var(--muted)">${t.kind === 'tv' ? 'Series' : 'Movie'}${t.year ? ' · ' + esc(t.year) : ''}</span>${badgeHtml(t.badge, t.more)}</span>
+          <span style="display:flex;flex-direction:column;gap:4px;min-width:0"><span style="font-size:15px;font-weight:600">${esc(t.name)}</span><span style="font-size:12px;color:var(--muted)">${t.kind === 'tv' ? 'Series' : 'Movie'}${t.year ? ' · ' + esc(t.year) : ''}</span>${t.progress ? `<span style="font-size:12.5px;color:var(--text-2)">${esc(t.progress)}</span>` : ''}${badgeHtml(t.badge, t.more)}</span>
         </a><div class="row-actions">${seg(t)}<button class="link-btn" data-act="remove-list" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}" aria-label="Remove ${esc(t.name)} from My List">Remove</button></div></div>`).join('')}</div>`).join('')
       : '<p class="empty">Nothing here yet. Add titles from a service page or search.</p>');
 }
@@ -219,9 +270,114 @@ async function screenServices(rid) {
     <p class="attrib">This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
 }
 
-function screenPlaceholder(tab, title, text) {
-  renderNav(tab, true);
-  $view.innerHTML = header(title) + `<p class="empty" style="margin-top:12px">${esc(text)}</p>`;
+async function screenTracked(rid) {
+  renderNav('tracked', true);
+  $view.innerHTML = header('Tracked') + '<p class="loading">Loading…</p>';
+  const d = await api('/tracked');
+  if (rid !== state.renderId) return;
+  const followHref = (f) => `#/${f.type}/${f.id}`;
+  $view.innerHTML = header('Tracked') + `
+    <p class="hint">What feeds Updates on Watching. Open a title to change its rules.</p>
+    <h2 class="sec" style="font-size:16px">Titles <span class="count">${d.titles.length}</span></h2>
+    ${d.titles.length ? `<div class="pad">${d.titles.map((t) => `<a class="row-card" href="#/tracked/${t.kind}/${t.id}"><span class="thumb">${t.poster ? `<img src="${img(t.poster, 'w185')}" alt="" loading="lazy">` : ''}</span><span class="body"><span class="title">${esc(t.name)}</span><span class="line">${esc(t.line)}</span></span><span style="color:var(--accent);font-size:18px">›</span></a>`).join('')}</div>`
+      : '<p class="empty">No tracked titles yet. Open a title you loved and turn on Track.</p>'}
+    <h2 class="sec" style="font-size:16px">Following <span class="count">${d.follows.length}</span></h2>
+    ${d.follows.length ? `<div class="pad"><div class="panel">${d.follows.map((f) => `<a class="item" href="${followHref(f)}"><span style="display:flex;align-items:center;gap:12px;min-width:0">${f.image ? `<img src="${img(f.image, 'w92')}" alt="" style="width:36px;height:36px;border-radius:${f.type === 'person' ? '18px' : '6px'};object-fit:${f.type === 'studio' ? 'contain' : 'cover'};background:var(--surface-2);flex:none">` : ''}<span class="l"><span class="t">${esc(f.name)}</span><span class="s">${FOLLOW_KIND[f.type]}</span></span></span><span style="color:var(--accent);font-size:18px">›</span></a>`).join('')}</div></div>`
+      : '<p class="empty">Follow a person, franchise or studio from its page.</p>'}`;
+}
+
+async function screenTrackedTitle(rid, kind, id) {
+  renderNav('tracked', true);
+  $view.innerHTML = '<p class="loading">Loading…</p>';
+  const m = await api('/tracked/' + kind + '/' + id);
+  if (rid !== state.renderId) return;
+  $view.innerHTML = `<a class="back" href="#/tracked">‹ Tracked</a>
+    <div class="pad" style="display:flex;gap:14px;align-items:center;margin:4px 0 6px">
+      ${m.poster ? `<img src="${img(m.poster, 'w185')}" alt="" style="width:56px;border-radius:8px">` : ''}
+      <span><span style="display:block;font-size:22px;font-weight:700;line-height:1.2">${esc(m.name)}</span><a href="#/title/${m.kind}/${m.id}" style="font-size:13px">Open title page ›</a></span>
+    </div>
+    <p class="hint">Each rule's switch decides whether its new titles come to Updates. The posters are everything it covers, newest first.</p>
+    ${m.rules.map((r) => `<div class="rule panel"><button class="item" data-act="rule-toggle" data-kind="${m.kind}" data-id="${m.id}" data-type="${r.type}" data-target="${r.target}" role="switch" aria-checked="${r.enabled}"><span class="l"><span class="t">${esc(r.label)}</span><span class="s">${esc(r.role)}</span></span><span class="sw" aria-checked="${r.enabled}"></span></button></div>
+      <div class="hs rule-results">${r.results.length ? r.results.map((t) => card(t)).join('') : '<p class="empty" style="margin:0">No released titles.</p>'}</div>`).join('')}
+    <div class="pad" style="margin:18px 0"><button class="btn-secondary" data-act="track-stop" data-kind="${m.kind}" data-id="${m.id}">Stop tracking</button></div>`;
+}
+
+// Good Stuff filters are remembered on this device only.
+function loadGoodFilters() {
+  try { return JSON.parse(localStorage.getItem('good') || 'null') || {}; } catch (e) { return {}; }
+}
+function saveGoodFilters() {
+  try { localStorage.setItem('good', JSON.stringify(state.good)); } catch (e) { /* not saved */ }
+}
+const DECADES = [['', 'Any decade'], ['2020', '2020s'], ['2010', '2010s'], ['2000', '2000s'], ['1990', '1990s'], ['1980', '1980s'], ['1970', '1970s'], ['older', 'Before 1970']];
+
+async function screenGood(rid) {
+  renderNav('good', true);
+  if (!state.good) state.good = { genre: '', decade: '', person: null, studio: null, rentals: false, ...loadGoodFilters() };
+  $view.innerHTML = header('Good Stuff') + `
+    <p class="hint">Well reviewed by your thresholds, or notable for awards, cult status or trending. Titles on My List are left out.</p>
+    <div id="good-filters"></div>
+    <div class="pad" style="margin:14px 0 4px"><button class="btn-primary" data-act="pick3">Pick 3 for me</button></div>
+    <div id="pick3"></div>
+    <div id="good-results"><p class="loading">Finding good stuff…</p></div>`;
+  return loadGood(rid);
+}
+
+function goodFiltersHtml(genres) {
+  const g = state.good;
+  const chip = (act, val, label, on) => `<button class="chip" data-act="${act}" data-val="${esc(val)}" aria-pressed="${on}">${esc(label)}</button>`;
+  const pickChip = (type, label) => {
+    const v = g[type];
+    return v ? `<button class="chip" data-act="good-clear" data-type="${type}" aria-pressed="true">${esc(v.name)} ✕</button>`
+      : `<button class="chip" data-act="good-find" data-type="${type}" aria-pressed="false">+ ${label}</button>`;
+  };
+  return `<div class="chips" style="margin-bottom:8px">${chip('good-genre', '', 'Any genre', !g.genre)}${genres.map((x) => chip('good-genre', x.name, x.name, g.genre === x.name)).join('')}</div>
+    <div class="chips" style="margin-bottom:8px">${DECADES.map(([v, l]) => chip('good-decade', v, l, (g.decade || '') === v)).join('')}</div>
+    <div class="chips">${pickChip('person', 'Person')}${pickChip('studio', 'Studio')}${chip('good-rentals', '', 'Include rentals', !!g.rentals)}<button class="chip" data-act="good-thresholds" aria-pressed="false">Thresholds</button></div>`;
+}
+
+async function loadGood(rid) {
+  const g = state.good;
+  const box = document.getElementById('good-results');
+  box.innerHTML = '<p class="loading">Finding good stuff…</p>';
+  document.getElementById('pick3').innerHTML = '';
+  const qs = new URLSearchParams();
+  if (g.genre) qs.set('genre', g.genre);
+  if (g.decade) qs.set('decade', g.decade);
+  if (g.person) qs.set('person', g.person.id);
+  if (g.studio) qs.set('studio', g.studio.id);
+  if (g.rentals) qs.set('rentals', '1');
+  try {
+    const d = await api('/good?' + qs);
+    if (rid !== state.renderId) return;
+    state.goodItems = d.items;
+    state.goodSettings = d.settings;
+    document.getElementById('good-filters').innerHTML = goodFiltersHtml(d.genres);
+    box.innerHTML = d.items.length
+      ? `<h2 class="sec" style="font-size:16px">Results <span class="count">${d.items.length}</span></h2><div class="grid">${d.items.map((t) => card({ ...t, sub: t.reason })).join('')}</div>`
+      : '<p class="empty" style="margin-top:12px">Nothing matches these filters. Try fewer filters, include rentals, or lower your thresholds.</p>';
+  } catch (e) { if (rid === state.renderId) box.innerHTML = errorHtml(e); }
+}
+
+function renderPick3() {
+  const items = [...(state.goodItems || [])];
+  const box = document.getElementById('pick3');
+  if (!items.length) { box.innerHTML = '<p class="empty">Nothing to pick from with these filters.</p>'; return; }
+  const picks = [];
+  while (picks.length < 3 && items.length) picks.push(items.splice(Math.floor(Math.random() * items.length), 1)[0]);
+  box.innerHTML = `<div class="pick3"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h2 style="margin:0;font-size:16px">Your three</h2><button class="chip" data-act="pick3">Re-roll</button></div>
+    <div class="grid" style="padding:0">${picks.map((t) => card({ ...t, sub: t.reason })).join('')}</div></div>`;
+}
+
+function openThresholds() {
+  const s = state.goodSettings;
+  const field = (k, label, step, disabled) => `<label class="lbl" for="th-${k}">${label}</label><input id="th-${k}" class="search" type="number" inputmode="decimal" step="${step}" value="${s[k]}" ${disabled ? 'disabled' : ''} style="margin-bottom:12px">`;
+  openSheet(`<h2>Well-reviewed thresholds</h2>
+    <p>A title counts as well reviewed if it clears any one of these. Notable titles (awards, cult status, trending) get in regardless.</p>
+    ${field('minTmdb', 'TMDb rating at least', '0.1')}${field('minVotes', 'with at least this many TMDb votes', '50')}
+    ${field('minRt', 'Rotten Tomatoes at least (%)', '1', !s.hasOmdb)}${field('minMc', 'Metacritic at least', '1', !s.hasOmdb)}
+    ${s.hasOmdb ? '' : '<p>Rotten Tomatoes and Metacritic need a free OMDb key in config.local.json as "omdbKey".</p>'}
+    <button class="btn-primary" data-act="thresholds-save">Save</button>`);
 }
 
 async function screenSearch(rid) {
@@ -286,11 +442,11 @@ async function screenTitle(rid, kind, id) {
   let nextHtml = '';
   if (isTv) {
     const n = t.next;
-    const line = n.aired ? `S${n.s}E${n.e} · ${n.unwatched} unwatched` : (t.nextAir ? `You're caught up · next episode airs ${t.nextAir.date}` : "You're caught up");
-    nextHtml = `<h2 class="sec" style="font-size:16px;margin-bottom:4px">Next up</h2>
+    const line = status === 'active' || status === 'finished' ? t.progress.line : `Starts at S${n.s}E${n.e} · ${n.unwatched} episodes aired`;
+    nextHtml = `<h2 class="sec" style="font-size:16px;margin-bottom:4px">Episodes</h2>
       <p class="hint" style="margin-top:0;font-size:14px;color:var(--text-2)">${esc(line)}</p>
       <div class="chips" id="season-chips">${t.seasons.map((s) => `<button class="chip" data-act="season" data-n="${s.n}" aria-pressed="false">Season ${s.n}</button>`).join('')}</div>
-      <p class="hint" style="margin-top:10px">Tap an episode to make it Next up. Earlier episodes count as watched.</p>
+      <p class="hint" style="margin-top:10px">Tap an episode to mark it and everything before it watched. Tap a watched one to un-mark it and everything after.</p>
       <div class="pad"><div class="panel" id="episodes"><p class="loading" style="margin:14px">Loading episodes…</p></div></div>`;
   }
 
@@ -309,6 +465,7 @@ async function screenTitle(rid, kind, id) {
       <button class="btn-secondary" data-act="title-status" data-val="${statusVal}">${statusLabel}</button>
       ${e ? `<button class="link-btn" style="margin-top:6px" data-act="remove-list" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}">Remove from My List</button>` : ''}
       <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Play on TV comes after the Roku launch test.</p>
+      <div class="panel" style="margin-top:12px"><button class="item" data-act="track-open" aria-label="Track ${esc(t.name)}"><span class="l"><span class="t">Track</span><span class="s">${t.tracked ? 'On · related new titles come to Updates' : 'Get updates on related titles'}</span></span><span class="sw" aria-checked="${t.tracked}"></span></button></div>
     </div>
     ${nextHtml}
     ${t.credits.length ? `<h2 class="sec" style="font-size:16px">Cast and crew</h2><div class="people">${t.credits.map((p) => `<a class="person" href="#/person/${p.id}"><span class="face">${p.photo ? `<img src="${img(p.photo, 'w185')}" alt="" loading="lazy">` : esc(initials(p.name))}</span><span class="n">${esc(p.name)}</span><span class="r">${esc(p.role)}</span></a>`).join('')}</div>` : ''}
@@ -342,7 +499,7 @@ async function loadSeason(rid, n) {
       else if (before) { cls = 'watched'; sub = 'Watched'; glyph = '✓'; }
       else if (isNext) { cls = 'next'; sub = 'Next up'; }
       else sub = 'Unwatched';
-      return `<button class="ep ${cls}" data-act="set-next" data-s="${n}" data-e="${ep.e}" ${ep.aired ? '' : 'disabled'}>
+      return `<button class="ep ${cls}" data-act="mark-ep" data-s="${n}" data-e="${ep.e}" data-watched="${before}" ${ep.aired ? '' : 'disabled'}>
         <span class="dot">${glyph}</span><span class="l" style="display:flex;flex-direction:column;gap:2px;min-width:0"><span class="t" style="font-size:14px;font-weight:600">${ep.e}. ${esc(ep.name || 'Episode ' + ep.e)}</span><span class="s" style="font-size:12px;color:var(--muted)">${esc(sub)}</span></span></button>`;
     }).join('') || '<p class="empty" style="margin:14px">No episodes listed.</p>';
   } catch (e) { box.innerHTML = errorHtml(e); }
@@ -363,7 +520,8 @@ async function screenPerson(rid, id) {
       <span class="person" style="flex:0 0 72px;width:72px;padding:0"><span class="face" style="width:72px;height:72px;border-radius:36px">${p.photo ? `<img src="${img(p.photo, 'w185')}" alt="">` : esc(initials(p.name))}</span></span>
       <span><span style="display:block;font-size:24px;font-weight:700;line-height:1.2">${esc(p.name)}</span><span style="font-size:13px;color:var(--text-2)">${esc(p.known || '')}</span></span>
     </div>
-    <p class="hint" style="margin-top:12px">Follow arrives with tracking in the next version.</p>
+    <div class="pad" style="margin:12px 0 2px">${followBtn('person', p)}</div>
+    <p class="hint">Following adds their new titles to Updates.</p>
     ${gridSection('Movies', p.movies)}${gridSection('Shows', p.shows)}`;
 }
 
@@ -373,7 +531,7 @@ async function screenCollection(rid, id) {
   const c = await api('/collection/' + id);
   if (rid !== state.renderId) return;
   $view.innerHTML = `<a class="back" href="javascript:history.back()">‹ Back</a>
-    <div class="pad"><h1 style="margin:4px 0 4px;font-size:26px">${esc(c.name)}</h1><p style="margin:0;font-size:13px;color:var(--text-2)">Collection · ${c.items.length} films in release order</p><p style="margin:4px 0 0;font-size:12px;color:var(--muted)">Source: TMDb collection</p></div>
+    <div class="pad"><h1 style="margin:4px 0 4px;font-size:26px">${esc(c.name)}</h1><p style="margin:0;font-size:13px;color:var(--text-2)">Collection · ${c.items.length} films in release order</p><p style="margin:4px 0 0;font-size:12px;color:var(--muted)">Source: TMDb collection</p><div style="margin-top:12px">${followBtn('collection', c)}</div></div>
     ${gridSection('Films', c.items)}`;
 }
 
@@ -383,7 +541,7 @@ async function screenStudio(rid, id) {
   const s = await api('/studio/' + id);
   if (rid !== state.renderId) return;
   $view.innerHTML = `<a class="back" href="javascript:history.back()">‹ Back</a>
-    <div class="pad"><h1 style="margin:4px 0 4px;font-size:26px">${esc(s.name)}</h1><p style="margin:0;font-size:13px;color:var(--text-2)">Studio · newest first</p><p style="margin:4px 0 0;font-size:12px;color:var(--muted)">Source: TMDb production companies</p></div>
+    <div class="pad"><h1 style="margin:4px 0 4px;font-size:26px">${esc(s.name)}</h1><p style="margin:0;font-size:13px;color:var(--text-2)">Studio · newest first</p><p style="margin:4px 0 0;font-size:12px;color:var(--muted)">Source: TMDb production companies</p><div style="margin-top:12px">${followBtn('studio', s)}</div></div>
     ${gridSection('Movies', s.movies)}${gridSection('Shows', s.shows)}`;
 }
 
@@ -415,8 +573,9 @@ async function route() {
     if (p0 === 'watching') return await screenWatching(rid);
     if (p0 === 'mylist') return await screenMyList(rid);
     if (p0 === 'services') return await screenServices(rid);
-    if (p0 === 'tracked') return screenPlaceholder('tracked', 'Tracked', 'Tracking titles, people, franchises and studios arrives in the next version.');
-    if (p0 === 'good') return screenPlaceholder('good', 'Good Stuff', 'Curated picks with Pick 3 arrive in the next version, once ratings and awards data are connected.');
+    if (p0 === 'tracked' && p1 && p2) return await screenTrackedTitle(rid, p1, p2);
+    if (p0 === 'tracked') return await screenTracked(rid);
+    if (p0 === 'good') return await screenGood(rid);
     if (p0 === 'search') return await screenSearch(rid);
     if (p0 === 'title' && p1 && p2) return await screenTitle(rid, p1, p2);
     if (p0 === 'person' && p1) return await screenPerson(rid, p1);
@@ -441,7 +600,92 @@ document.addEventListener('click', async (ev) => {
   if (!el) return;
   const act = el.dataset.act;
   try {
-    if (act === 'close-sheet') return closeSheet();
+    if (act === 'close-sheet') {
+      closeSheet();
+      if (state.refreshOnClose) { state.refreshOnClose = false; route(); }
+      return;
+    }
+
+    if (act === 'track-open') return openTrackSheet();
+    if (act === 'track-tick') {
+      const it = state.trackItems[Number(el.dataset.i)];
+      it.on = !it.on;
+      el.setAttribute('aria-checked', String(it.on));
+      el.querySelector('.box').textContent = it.on ? '✓' : '';
+      return;
+    }
+    if (act === 'track-save') {
+      const t = state.title;
+      await api('/track', { kind: t.kind, id: t.id, name: t.name, poster: t.poster, year: t.year, items: state.trackItems });
+      toast(`Tracking ${t.name}`);
+      return route();
+    }
+    if (act === 'track-stop') {
+      const t = el.dataset.kind ? { kind: el.dataset.kind, id: el.dataset.id } : state.title;
+      await api('/track', { kind: t.kind, id: t.id, op: 'stop' });
+      toast('Stopped tracking');
+      if (location.hash.startsWith('#/tracked/')) { location.hash = '#/tracked'; return; }
+      return route();
+    }
+    if (act === 'rule-toggle') {
+      const on = el.getAttribute('aria-checked') !== 'true';
+      await api('/rule', { kind: el.dataset.kind, id: el.dataset.id, type: el.dataset.type, target: el.dataset.target, enabled: on });
+      el.setAttribute('aria-checked', String(on));
+      el.querySelector('.sw').setAttribute('aria-checked', String(on));
+      return;
+    }
+    if (act === 'follow-toggle') {
+      const isSwitch = el.getAttribute('role') === 'switch';
+      const on = (isSwitch ? el.getAttribute('aria-checked') : el.getAttribute('aria-pressed')) !== 'true';
+      await api('/follow', { type: el.dataset.type, id: el.dataset.id, name: el.dataset.name, image: el.dataset.image || null, on });
+      if (isSwitch) { el.setAttribute('aria-checked', String(on)); el.querySelector('.sw').setAttribute('aria-checked', String(on)); return; }
+      el.setAttribute('aria-pressed', String(on));
+      el.textContent = on ? '✓ Following' : 'Follow';
+      return toast(on ? `Following ${el.dataset.name}. New titles will come to Updates.` : `Stopped following ${el.dataset.name}`);
+    }
+    if (act === 'upd-add' || act === 'upd-dismiss') {
+      const d = el.dataset;
+      if (act === 'upd-add') await api('/library', { op: 'add', kind: d.kind, id: d.id, name: d.name, poster: d.poster || null, year: d.year });
+      else await api('/updates/dismiss', { kind: d.kind, id: d.id });
+      el.closest('.upd').remove();
+      return toast(act === 'upd-add' ? `Added ${d.name} to My List` : `Dismissed ${d.name}`);
+    }
+    if (act === 'upd-manage') return openManageSheet(state.updates[el.dataset.key]);
+
+    if (act === 'good-genre' || act === 'good-decade' || act === 'good-rentals' || act === 'good-clear') {
+      const g = state.good;
+      if (act === 'good-genre') g.genre = el.dataset.val;
+      if (act === 'good-decade') g.decade = el.dataset.val;
+      if (act === 'good-rentals') g.rentals = !g.rentals;
+      if (act === 'good-clear') g[el.dataset.type] = null;
+      saveGoodFilters();
+      return loadGood(state.renderId);
+    }
+    if (act === 'good-find') {
+      const type = el.dataset.type;
+      openSheet(`<h2>Filter by ${type === 'person' ? 'a person' : 'a studio'}</h2>
+        <p>${type === 'person' ? 'Anyone in the cast or crew.' : 'Any studio or production company.'}</p>
+        <input class="search" type="search" data-find="${type === 'person' ? 'person' : 'company'}" placeholder="${type === 'person' ? 'Greta Gerwig, Pedro Pascal…' : 'A24, Pixar, Ghibli…'}" autofocus>
+        <div id="find-results" class="panel" style="margin-top:10px"></div>`);
+      $sheet.querySelector('input').focus();
+      return;
+    }
+    if (act === 'good-pick') {
+      state.good[el.dataset.type] = { id: Number(el.dataset.id), name: el.dataset.name };
+      saveGoodFilters();
+      closeSheet();
+      return loadGood(state.renderId);
+    }
+    if (act === 'pick3') return renderPick3();
+    if (act === 'good-thresholds') return openThresholds();
+    if (act === 'thresholds-save') {
+      const body = {};
+      for (const k of ['minTmdb', 'minVotes', 'minRt', 'minMc']) { const i = document.getElementById('th-' + k); if (i && !i.disabled) body[k] = i.value; }
+      await api('/good/settings', body);
+      closeSheet();
+      toast('Thresholds saved');
+      return loadGood(state.renderId);
+    }
     if (act === 'back') return history.length > 1 ? history.back() : (location.hash = '#/watching');
     if (act === 'expand') return el.classList.toggle('clamp');
 
@@ -518,11 +762,31 @@ document.addEventListener('click', async (ev) => {
 
     if (act === 'season') return loadSeason(state.renderId, Number(el.dataset.n));
 
-    if (act === 'set-next') {
+    if (act === 'mark-ep') {
       const t = state.title;
-      await api('/library', { kind: t.kind, id: t.id, name: t.name, poster: t.poster, year: t.year, s: el.dataset.s, e: el.dataset.e });
-      toast('Next up: S' + el.dataset.s + 'E' + el.dataset.e);
+      const base = { kind: t.kind, id: t.id, name: t.name, poster: t.poster, year: t.year };
+      const s = Number(el.dataset.s), e = Number(el.dataset.e);
+      const res = el.dataset.watched === 'true'
+        ? await api('/library', { ...base, status: 'active', s, e })
+        : await api('/library', { ...base, through: { s, e } });
+      const prev = res.prev;
+      const undo = async () => {
+        await api('/library', prev ? { ...base, status: prev.status, s: prev.s, e: prev.e } : { ...base, op: 'remove' });
+        route();
+      };
+      let msg = el.dataset.watched === 'true' ? `Un-marked from S${s}E${e} on` : `Watched through S${s}E${e}`;
+      if (res.autoFinished) msg = `${t.name} is finished. Moved to Finished.`;
+      else if (res.progress && res.progress.state !== 'watching') msg += '. ' + res.progress.line;
+      toast(msg, undo);
       return route();
+    }
+
+    if (act === 'undo') {
+      const fn = state.undo;
+      $toast.hidden = true;
+      state.undo = null;
+      if (fn) await fn();
+      return;
     }
 
     if (act === 'will') {
@@ -545,6 +809,20 @@ document.addEventListener('input', (ev) => {
   if (el.dataset.search) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => runSearch(el), 350);
+  }
+  if (el.dataset.find) {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const out = document.getElementById('find-results');
+      const q = el.value;
+      if (!q.trim()) { out.innerHTML = ''; return; }
+      try {
+        const r = await api('/find/' + el.dataset.find + '?q=' + encodeURIComponent(q));
+        if (el.value !== q) return;
+        const type = el.dataset.find === 'person' ? 'person' : 'studio';
+        out.innerHTML = r.results.map((x) => `<button class="item" data-act="good-pick" data-type="${type}" data-id="${x.id}" data-name="${esc(x.name)}"><span class="l"><span class="t">${esc(x.name)}</span><span class="s">${esc(x.sub)}</span></span></button>`).join('') || '<p class="empty" style="padding:12px 0">No matches.</p>';
+      } catch (e) { out.innerHTML = errorHtml(e); }
+    }, 300);
   }
   if (el.dataset.filter === 'others') {
     const q = el.value.trim().toLowerCase();

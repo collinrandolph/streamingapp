@@ -15,6 +15,7 @@ function load() {
   return {
     tmdbToken: process.env.TMDB_TOKEN || local.tmdbToken || '',
     tmdbApiKey: process.env.TMDB_API_KEY || local.tmdbApiKey || '',
+    omdbKey: process.env.OMDB_KEY || local.omdbKey || '',
     region: local.region || 'US',
     dataDir: path.join(ROOT, 'data')
   };

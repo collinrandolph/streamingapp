@@ -121,9 +121,21 @@ function withListFlags(items) {
   return items.map((t) => ({ ...t, onList: on.has(t.kind + ':' + t.id) }));
 }
 
-async function details(kind, id) {
-  if (kind === 'movie') return tmdb.get('/movie/' + id + '?append_to_response=credits,watch/providers,release_dates', DAY / 2);
-  return tmdb.get('/tv/' + id + '?append_to_response=aggregate_credits,watch/providers,external_ids', DAY / 2);
+async function details(kind, id, ttl = DAY / 2) {
+  if (kind === 'movie') return tmdb.get('/movie/' + id + '?append_to_response=credits,watch/providers,release_dates', ttl);
+  return tmdb.get('/tv/' + id + '?append_to_response=aggregate_credits,watch/providers,external_ids', ttl);
+}
+
+// How often a show is re-checked depends on where you are in it.
+const REFRESH = { watching: DAY / 2, airing: DAY / 2, between: 7 * DAY, done: 30 * DAY };
+const refreshFor = (r) => REFRESH[r.pstate] || DAY / 2;
+
+function shortDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T12:00:00');
+  const opts = { month: 'short', day: 'numeric' };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('en-US', opts);
 }
 
 // Seasons with their aired-episode counts, from the show's details (season 0 = specials, skipped).
@@ -156,6 +168,49 @@ function nextPos(seasons, s, e) {
   if (se && e < se.count) return { s, e: e + 1 };
   const later = seasons.find((x) => x.n > s);
   return later ? { s: later.n, e: 1 } : { s, e: e + 1 };
+}
+// A saved place past the end of a season moves to the next season once TMDb lists it.
+function normalizePos(seasons, s, e) {
+  const se = seasons.find((x) => x.n === s);
+  if (se && e > se.count) {
+    const later = seasons.find((x) => x.n > s);
+    if (later) return { s: later.n, e: 1 };
+  }
+  return { s, e };
+}
+
+// Where an Active show stands for you, worked out from TMDb data rather than set by hand.
+// The words you see: Watching (episodes left to watch, aired or with a date), Caught up (nothing
+// left and no next episode dated), Finished (the show has ended and you've seen it all).
+//   watching: aired episodes left                      → Watching
+//   airing:   none left, next episode this season dated → Watching
+//   between:  season over, next season not started yet → Caught up (its premiere date shows if known)
+//   done:     none left and the show ended              → Finished
+function progressOf(d, s, e) {
+  const seasons = seasonsOf(d);
+  const unwatched = unwatchedFrom(seasons, s, e);
+  if (unwatched > 0) return { state: 'watching', label: 'Watching', unwatched, line: `Next up · S${s}E${e} · ${unwatched} unwatched` };
+  if (d.status === 'Ended' || d.status === 'Canceled') return { state: 'done', label: 'Finished', line: 'Finished · the show has ended' };
+  const na = d.next_episode_to_air;
+  if (na && na.air_date && na.episode_number > 1) {
+    return { state: 'airing', label: 'Watching', date: na.air_date, line: `Watching · S${na.season_number}E${na.episode_number} airs ${shortDate(na.air_date)}` };
+  }
+  if (na && na.air_date) {
+    return { state: 'between', label: 'Caught up', date: na.air_date, line: `Caught up · Season ${na.season_number} premieres ${shortDate(na.air_date)}` };
+  }
+  const announced = seasons.find((x) => x.aired === 0 && (x.n > s || (x.n === s && e === 1)));
+  return { state: 'between', label: 'Caught up', line: announced ? `Caught up · Season ${announced.n} announced, no date yet` : 'Caught up · no new episodes announced' };
+}
+// Saves where a show stands, and closes out (or reopens) shows the app finished by itself.
+function reconcile(r, p) {
+  setPstate(r, p);
+  if (r.status === 'active' && p.state === 'done') r.status = 'finished';
+  else if (r.status === 'finished' && r.pstate === 'done' && p.state !== 'done') r.status = 'active'; // the show came back
+  else return;
+  db.prepare('UPDATE library SET status = ? WHERE kind = ? AND tmdb_id = ?').run(r.status, r.kind, r.tmdb_id);
+}
+function setPstate(r, p) {
+  if (r.pstate !== p.state) db.prepare('UPDATE library SET pstate = ? WHERE kind = ? AND tmdb_id = ?').run(p.state, r.kind, r.tmdb_id);
 }
 
 function theatrical(movie) {
@@ -251,9 +306,9 @@ async function availabilityFor(items) {
     try {
       const wp = await tmdb.get('/' + t.kind + '/' + t.id + '/watch/providers', DAY / 2);
       const a = availability(wp, mine);
-      return { ...t, badge: a.badges[0], more: a.badges.length - 1, faded: a.tier !== 'yours', yours: a.yours.map((y) => y.family) };
+      return { ...t, badge: a.badges[0], more: a.badges.length - 1, faded: a.tier !== 'yours', yours: a.yours.map((y) => y.family), anyOffer: a.hasStream || a.rent.length > 0 || a.buy.length > 0 };
     } catch (e) {
-      return { ...t, badge: null, more: 0, faded: false, yours: [] };
+      return { ...t, badge: null, more: 0, faded: false, yours: [], anyOffer: false };
     }
   }));
 }
@@ -319,16 +374,17 @@ async function title(kind, id) {
     justwatch: a.link,
     showWill: !theaters && !a.hasStream && (a.rent.length > 0 || a.buy.length > 0),
     willSearch: 'https://www.google.com/search?q=' + encodeURIComponent(name + ' ' + year + ' streaming release date'),
-    entry
+    entry,
+    tracked: tracking.isTracked(kind, id)
   };
   if (isTv) {
     const seasons = seasonsOf(d);
-    const s = entry ? entry.next_s : 1;
-    const e = entry ? entry.next_e : 1;
+    const { s, e } = normalizePos(seasons, entry ? entry.next_s : 1, entry ? entry.next_e : 1);
     out.seasons = seasons;
     out.ended = d.status === 'Ended' || d.status === 'Canceled';
     out.next = { s, e, aired: isAired(seasons, s, e), unwatched: unwatchedFrom(seasons, s, e) };
-    out.nextAir = d.next_episode_to_air ? { s: d.next_episode_to_air.season_number, e: d.next_episode_to_air.episode_number, date: d.next_episode_to_air.air_date } : null;
+    out.progress = progressOf(d, s, e);
+    if (entry && entry.status === 'active') setPstate(entry, out.progress);
   }
   return out;
 }
@@ -342,7 +398,7 @@ async function season(id, n) {
   };
 }
 
-function library(body) {
+async function library(body) {
   const kind = body.kind;
   const id = Number(body.id);
   if ((kind !== 'movie' && kind !== 'tv') || !id) throw Object.assign(new Error('Bad library request'), { status: 400 });
@@ -351,44 +407,80 @@ function library(body) {
     db.prepare('DELETE FROM library WHERE kind = ? AND tmdb_id = ?').run(kind, id);
     return { entry: null };
   }
+  const prev = cur ? { status: cur.status, s: cur.next_s, e: cur.next_e } : null;
   if (!cur) {
     db.prepare('INSERT INTO library (kind, tmdb_id, name, poster, year, added_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(kind, id, body.name || '', body.poster || null, body.year || '', Date.now());
   }
   if (body.status) db.prepare('UPDATE library SET status = ? WHERE kind = ? AND tmdb_id = ?').run(body.status, kind, id);
   if (body.s && body.e) db.prepare('UPDATE library SET next_s = ?, next_e = ? WHERE kind = ? AND tmdb_id = ?').run(Number(body.s), Number(body.e), kind, id);
-  return { entry: libEntry(kind, id) };
+
+  // Watched through an episode: Next up becomes the one after it, and an ended show you've finished moves to Finished.
+  if (kind === 'tv' && body.through) {
+    const d = await details('tv', id);
+    const pos = nextPos(seasonsOf(d), Number(body.through.s), Number(body.through.e));
+    const p = progressOf(d, pos.s, pos.e);
+    const status = p.state === 'done' ? 'finished' : 'active';
+    db.prepare('UPDATE library SET next_s = ?, next_e = ?, status = ?, pstate = ? WHERE kind = ? AND tmdb_id = ?').run(pos.s, pos.e, status, p.state, kind, id);
+    return { entry: libEntry(kind, id), progress: p, autoFinished: status === 'finished', prev };
+  }
+  return { entry: libEntry(kind, id), prev };
 }
 
 async function myList() {
   const rows = db.prepare('SELECT * FROM library ORDER BY added_at DESC').all();
-  const items = await availabilityFor(rows.map((r) => ({ kind: r.kind, id: r.tmdb_id, name: r.name, year: r.year, poster: r.poster, status: r.status, tracked: !!r.tracked })));
-  const groups = [['active', 'Active'], ['none', 'No status'], ['finished', 'Finished']].map(([k, label]) => ({
-    key: k, label, items: items.filter((i) => i.status === k)
+  const progress = new Map();
+  await Promise.all(rows.filter((r) => r.kind === 'tv' && r.status === 'active').map(async (r) => {
+    try {
+      const d = await details('tv', r.tmdb_id, refreshFor(r));
+      const pos = normalizePos(seasonsOf(d), r.next_s, r.next_e);
+      const p = progressOf(d, pos.s, pos.e);
+      reconcile(r, p);
+      progress.set(r.tmdb_id, p);
+    } catch (e) { /* no line this time */ }
+  }));
+  // My List groups: Watching, Caught up, Not started, Finished. Active shows split by where you are in them.
+  const groupOf = (r) => {
+    if (r.status !== 'active') return r.status;
+    const p = progress.get(r.tmdb_id);
+    return p && p.state === 'between' ? 'caught' : 'watching';
+  };
+  const items = await availabilityFor(rows.map((r) => {
+    const p = r.kind === 'tv' ? progress.get(r.tmdb_id) : null;
+    return { kind: r.kind, id: r.tmdb_id, name: r.name, year: r.year, poster: r.poster, status: r.status, group: groupOf(r), tracked: !!r.tracked, progress: p ? p.line : null };
+  }));
+  const groups = [['watching', 'Watching'], ['caught', 'Caught up'], ['none', 'Not started'], ['finished', 'Finished']].map(([k, label]) => ({
+    key: k, label, items: items.filter((i) => i.group === k)
   })).filter((g) => g.items.length);
   return { groups };
 }
 
 async function watching() {
   const mine = myFamilySet();
-  const rows = db.prepare("SELECT * FROM library WHERE status != 'finished' ORDER BY added_at DESC").all();
+  // Finished shows the app closed out itself (pstate 'done') are still checked monthly, in case they come back.
+  const rows = db.prepare("SELECT * FROM library WHERE status != 'finished' OR (kind = 'tv' AND pstate = 'done') ORDER BY added_at DESC").all();
   const shows = [];
   const coming = [];
   const movies = [];
+  const updates = [];
   const t = today();
   const in10 = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10);
   await Promise.all(rows.map(async (r) => {
     try {
-      const d = await details(r.kind, r.tmdb_id);
+      const d = await details(r.kind, r.tmdb_id, refreshFor(r));
       const a = availability(d['watch/providers'], mine);
       const base = { kind: r.kind, id: r.tmdb_id, name: r.name, poster: r.poster, year: r.year, badge: a.badges[0], faded: a.tier !== 'yours' };
-      if (r.kind === 'tv' && r.status === 'active') {
-        const seasons = seasonsOf(d);
-        const n = unwatchedFrom(seasons, r.next_s, r.next_e);
-        if (n > 0) shows.push({ ...base, next: 'S' + r.next_s + 'E' + r.next_e, unwatched: n, added: r.added_at });
+      if (r.kind === 'tv' && (r.status === 'active' || r.status === 'finished')) {
+        const pos = normalizePos(seasonsOf(d), r.next_s, r.next_e);
+        const p = progressOf(d, pos.s, pos.e);
+        reconcile(r, p);
+        if (r.status === 'finished') return;
+        if (p.state === 'watching') shows.push({ ...base, next: 'S' + pos.s + 'E' + pos.e, unwatched: p.unwatched, added: r.added_at });
         const na = d.next_episode_to_air;
         if (na && na.air_date && na.air_date >= t && na.air_date <= in10) {
-          coming.push({ ...base, line: 'S' + na.season_number + 'E' + na.episode_number + ' · ' + na.air_date, date: na.air_date });
+          coming.push({ ...base, line: 'S' + na.season_number + 'E' + na.episode_number + ' · ' + shortDate(na.air_date), date: na.air_date });
+        } else if (p.state === 'between' && p.date && p.date > in10) {
+          updates.push({ ...base, line: p.line.replace('Caught up · ', ''), date: p.date });
         }
       } else if (r.kind === 'movie' && a.tier === 'yours') {
         movies.push({ ...base, added: r.added_at });
@@ -400,7 +492,8 @@ async function watching() {
   shows.sort((x, y) => y.added - x.added);
   movies.sort((x, y) => y.added - x.added);
   coming.sort((x, y) => x.date.localeCompare(y.date));
-  return { shows, movies, coming };
+  updates.sort((x, y) => x.date.localeCompare(y.date));
+  return { shows, movies, coming, updates };
 }
 
 // Top-line jobs shown on person pages; everything else (Thanks, Producer, crew roles) is left out.
@@ -409,13 +502,19 @@ const CREDIT_JOBS = {
   'Original Music Composer': 'Composer', 'Director of Photography': 'Cinematographer'
 };
 
-async function person(id) {
+// withAvail adds service badges (one watch/providers lookup per title), for the page itself;
+// the Updates feed leaves it off and checks availability only for the titles it keeps.
+async function person(id, withAvail = false) {
   const p = await tmdb.get('/person/' + id + '?append_to_response=combined_credits', DAY);
   const all = [...((p.combined_credits && p.combined_credits.cast) || []), ...((p.combined_credits && p.combined_credits.crew) || [])];
   const seen = new Map();
+  // New releases haven't collected votes yet, so recent titles need fewer to count.
+  const recent = new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10);
   for (const c of all) {
     if (c.media_type !== 'movie' && c.media_type !== 'tv') continue;
-    if ((c.vote_count || 0) < 20) continue;
+    const date = c.release_date || c.first_air_date || '';
+    if (!date) continue;
+    if ((c.vote_count || 0) < (date >= recent ? 2 : 20)) continue;
     if (!c.job && /\b(self|himself|herself|themselves)\b/i.test(c.character || '')) continue;
     if (c.job && !CREDIT_JOBS[c.job]) continue;
     const key = c.media_type + ':' + c.id;
@@ -423,35 +522,63 @@ async function person(id) {
     if (seen.has(key)) { const s = seen.get(key); if (!s.roles.includes(role)) s.roles.push(role); continue; }
     seen.set(key, { ...summarize(c, c.media_type), roles: [role], date: c.release_date || c.first_air_date || '' });
   }
-  const items = [...seen.values()].sort((a, b) => b.date.localeCompare(a.date)).map((x) => ({ ...x, sub: x.roles.slice(0, 2).join(', ') + (x.year ? ' · ' + x.year : '') }));
+  let items = [...seen.values()].sort((a, b) => b.date.localeCompare(a.date)).map((x) => ({ ...x, sub: x.roles.slice(0, 2).join(', ') + (x.year ? ' · ' + x.year : '') }));
+  if (withAvail) items = yoursFirst(await availabilityFor(items));
   return {
-    name: p.name, photo: p.profile_path, known: p.known_for_department,
+    id: Number(id), name: p.name, photo: p.profile_path, known: p.known_for_department,
+    following: tracking.isFollowing('person', id),
     movies: withListFlags(items.filter((x) => x.kind === 'movie')),
     shows: withListFlags(items.filter((x) => x.kind === 'tv'))
   };
 }
 
-async function collection(id) {
+// Titles on your services first, everything else after; each part keeps its order.
+function yoursFirst(items) {
+  return [...items.filter((x) => !x.faded), ...items.filter((x) => x.faded)];
+}
+
+async function collection(id, withAvail = false) {
   const c = await tmdb.get('/collection/' + id, DAY);
   const t = today();
   // Unreleased entries stay hidden until they come out.
   const parts = (c.parts || []).filter((p) => p.release_date && p.release_date <= t).sort((a, b) => a.release_date.localeCompare(b.release_date));
-  return { name: c.name, overview: c.overview, items: withListFlags(parts.map((p) => ({ ...summarize(p, 'movie'), sub: yearOf(p.release_date) }))) };
-}
-
-async function studio(id) {
-  const t = today();
-  const [co, m, tv] = await Promise.all([
-    tmdb.get('/company/' + id, 7 * DAY),
-    tmdb.get('/discover/movie?with_companies=' + id + '&sort_by=primary_release_date.desc&primary_release_date.lte=' + t + '&vote_count.gte=20', DAY),
-    tmdb.get('/discover/tv?with_companies=' + id + '&sort_by=first_air_date.desc&first_air_date.lte=' + t + '&vote_count.gte=20', DAY)
-  ]);
+  let items = parts.map((p) => ({ ...summarize(p, 'movie'), sub: yearOf(p.release_date), date: p.release_date }));
+  if (withAvail) items = yoursFirst(await availabilityFor(items));
   return {
-    name: co.name,
-    movies: withListFlags((m.results || []).map((x) => ({ ...summarize(x, 'movie'), sub: yearOf(x.release_date) }))),
-    shows: withListFlags((tv.results || []).map((x) => ({ ...summarize(x, 'tv'), sub: yearOf(x.first_air_date) })))
+    id: Number(id), name: c.name, overview: c.overview, poster: c.poster_path || null,
+    following: tracking.isFollowing('collection', id),
+    items: withListFlags(items)
   };
 }
+
+async function studio(id, withAvail = false) {
+  const t = today();
+  // Established titles need 20 votes; the last 120 days only need a couple, so new releases show up.
+  const recent = new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10);
+  const [co, m, tv, mNew, tvNew] = await Promise.all([
+    tmdb.get('/company/' + id, 7 * DAY),
+    tmdb.get('/discover/movie?with_companies=' + id + '&sort_by=primary_release_date.desc&primary_release_date.lte=' + t + '&vote_count.gte=20', DAY),
+    tmdb.get('/discover/tv?with_companies=' + id + '&sort_by=first_air_date.desc&first_air_date.lte=' + t + '&vote_count.gte=20', DAY),
+    tmdb.get('/discover/movie?with_companies=' + id + '&sort_by=popularity.desc&primary_release_date.gte=' + recent + '&primary_release_date.lte=' + t + '&vote_count.gte=2', DAY),
+    tmdb.get('/discover/tv?with_companies=' + id + '&sort_by=popularity.desc&first_air_date.gte=' + recent + '&first_air_date.lte=' + t + '&vote_count.gte=2', DAY)
+  ]);
+  const merge = (a, b) => { const ids = new Set(); return [...a, ...b].filter((x) => !ids.has(x.id) && ids.add(x.id)); };
+  const byDate = (key) => (a, b) => (b[key] || '').localeCompare(a[key] || '');
+  let movies = merge(mNew.results || [], m.results || []).sort(byDate('release_date')).map((x) => ({ ...summarize(x, 'movie'), sub: yearOf(x.release_date), date: x.release_date }));
+  let shows = merge(tvNew.results || [], tv.results || []).sort(byDate('first_air_date')).map((x) => ({ ...summarize(x, 'tv'), sub: yearOf(x.first_air_date), date: x.first_air_date }));
+  if (withAvail) [movies, shows] = await Promise.all([availabilityFor(movies).then(yoursFirst), availabilityFor(shows).then(yoursFirst)]);
+  return {
+    id: Number(id), name: co.name, logo: co.logo_path || null,
+    following: tracking.isFollowing('studio', id),
+    movies: withListFlags(movies),
+    shows: withListFlags(shows)
+  };
+}
+
+// Shared helpers for the tracking and Good Stuff modules.
+const helpers = { db, tmdb, DAY, today, shortDate, summarize, withListFlags, availabilityFor, myFamilySet, providerFamilies, details, creditsOf, person, collection, studio, yearOf };
+const tracking = require('./tracking')(helpers);
+const good = require('./good')(helpers);
 
 // ---------- Router ----------
 
@@ -468,9 +595,21 @@ async function handle(method, path, query, body) {
   if (method === 'POST' && a === 'library') return library(body || {});
   if (method === 'GET' && a === 'mylist') return myList();
   if (method === 'GET' && a === 'watching') return watching();
-  if (method === 'GET' && a === 'person' && b) return person(b);
-  if (method === 'GET' && a === 'collection' && b) return collection(b);
-  if (method === 'GET' && a === 'studio' && b) return studio(b);
+  if (method === 'GET' && a === 'person' && b) return person(b, true);
+  if (method === 'GET' && a === 'collection' && b) return collection(b, true);
+  if (method === 'GET' && a === 'studio' && b) return studio(b, true);
+  if (method === 'GET' && a === 'track' && b && c) return tracking.options(b, c);
+  if (method === 'POST' && a === 'track') return tracking.save(body || {});
+  if (method === 'POST' && a === 'rule') return tracking.setRule(body || {});
+  if (method === 'POST' && a === 'follow') return tracking.follow(body || {});
+  if (method === 'GET' && a === 'updates') return tracking.feed();
+  if (method === 'POST' && a === 'updates' && b === 'dismiss') return tracking.dismiss(body || {});
+  if (method === 'GET' && a === 'tracked' && b && c) return tracking.manage(b, c);
+  if (method === 'GET' && a === 'tracked') return tracking.list();
+  if (method === 'GET' && a === 'good' && b === 'settings') return good.settings();
+  if (method === 'POST' && a === 'good' && b === 'settings') return good.saveSettings(body || {});
+  if (method === 'GET' && a === 'good') return good.list({ genre: query.get('genre'), decade: query.get('decade'), person: query.get('person'), studio: query.get('studio'), rentals: query.get('rentals') === '1' });
+  if (method === 'GET' && a === 'find' && (b === 'person' || b === 'company')) return good.find(b, query.get('q'));
   throw Object.assign(new Error('Not found'), { status: 404 });
 }
 
