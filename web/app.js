@@ -57,10 +57,17 @@ function addBtn(t) {
   return `<button class="add ${t.onList ? 'on' : ''}" data-act="toggle-list" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}" data-poster="${esc(t.poster || '')}" data-year="${esc(t.year || '')}" aria-label="${t.onList ? 'Remove ' + esc(t.name) + ' from My List' : 'Add ' + esc(t.name) + ' to My List'}">${t.onList ? '✓' : '+'}</button>`;
 }
 
+// A title you'd have to rent or buy gets a corner tag on its poster. Titles streaming on a service you
+// don't have don't: their grey service logo already says so.
+function rentTag(t) {
+  const b = t.badge;
+  return b && !b.logo && /^(Rent|Buy|Rent or buy)$/.test(b.label) ? `<span class="rent-tag">${esc(b.label)}</span>` : '';
+}
+
 function card(t, opts = {}) {
   const poster = t.poster ? `<img src="${img(t.poster, 'w342')}" alt="" loading="lazy">` : `<span class="ph">${esc(t.name)}</span>`;
-  return `<div class="card ${t.faded ? 'faded' : ''}">
-    <a class="poster" href="#/title/${t.kind}/${t.id}" aria-label="${esc(t.name)}">${poster}</a>
+  return `<div class="card">
+    <a class="poster" href="#/title/${t.kind}/${t.id}" aria-label="${esc(t.name)}">${poster}${opts.badge ? '' : rentTag(t)}</a>
     ${opts.noAdd ? '' : addBtn(t)}
     <div class="meta"><div class="name">${esc(t.name)}</div><div class="sub">${esc(t.sub || t.year || '')}</div></div>
     ${opts.badge ? badgeHtml(opts.badge, 0) : badgeHtml(t.badge, t.more)}
@@ -69,8 +76,8 @@ function card(t, opts = {}) {
 
 function rowCard(t, line, extra) {
   const thumb = t.poster ? `<img src="${img(t.poster, 'w185')}" alt="" loading="lazy">` : '';
-  return `<a class="row-card ${t.faded ? 'faded' : ''}" href="#/title/${t.kind}/${t.id}">
-    <span class="thumb">${thumb}</span>
+  return `<a class="row-card" href="#/title/${t.kind}/${t.id}">
+    <span class="thumb">${thumb}${rentTag(t)}</span>
     <span class="body"><span class="title">${esc(t.name)}</span><span class="line">${esc(line || '')}</span>${badgeHtml(t.badge, 0)}${extra || ''}</span>
   </a>`;
 }
@@ -321,8 +328,8 @@ async function screenMyList(rid) {
       <div class="pad" id="grp-${g.key}" ${open ? '' : 'hidden'}>${g.items.map((t) => {
         state.listItems[t.kind + ':' + t.id] = t;
         return `<div class="list-row">
-        <a href="#/title/${t.kind}/${t.id}" class="list-main ${t.faded ? 'faded' : ''}">
-          <span class="thumb">${t.poster ? `<img src="${img(t.poster, 'w92')}" alt="">` : ''}</span>
+        <a href="#/title/${t.kind}/${t.id}" class="list-main">
+          <span class="thumb">${t.poster ? `<img src="${img(t.poster, 'w92')}" alt="">` : ''}${rentTag(t)}</span>
           <span class="body"><span class="title">${esc(t.name)}</span><span class="meta">${t.kind === 'tv' ? 'Series' : 'Movie'}${t.year ? ' · ' + esc(t.year) : ''}</span>${t.progress ? `<span class="line">${esc(t.progress)}</span>` : ''}${badgeHtml(t.badge, t.more)}</span>
         </a><button class="more-btn" data-act="row-menu" data-key="${t.kind}:${t.id}" aria-label="More for ${esc(t.name)}">⋯</button></div>`;
       }).join('')}</div>`;
@@ -445,6 +452,7 @@ function ratingsHtml(t) {
 
 async function screenTitle(rid, kind, id) {
   renderNav(null, true);
+  $view.classList.add('has-hero');
   $view.innerHTML = '<p class="loading">Loading…</p>';
   const t = await api('/title/' + kind + '/' + id);
   if (rid !== state.renderId) return;
@@ -599,6 +607,7 @@ function screenRemoteElsewhere() {
 
 async function route() {
   closeSheet();
+  $view.classList.remove('has-hero');
   const rid = ++state.renderId;
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   try {

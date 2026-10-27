@@ -123,7 +123,7 @@ function stepBody(step, a) {
     const on = chosenServices(a);
     const rentals = !!state.goodSettings.rentals;
     return `<div class="choices">${myServiceList().map((s) => choice('gs-service', s.family, s.name, on.includes(s.family), s.logo ? `<img src="${img(s.logo, 'w92')}" alt="">` : '')).join('')}</div>
-      <div class="panel" style="margin-top:16px"><button class="item" data-act="gs-rentals" role="switch" aria-checked="${rentals}"><span class="l"><span class="t">Include rentals</span><span class="s">Titles you can rent or buy, faded. Remembered for next time.</span></span><span class="sw" aria-checked="${rentals}"></span></button></div>`;
+      <div class="panel" style="margin-top:16px"><button class="item" data-act="gs-rentals" role="switch" aria-checked="${rentals}"><span class="l"><span class="t">Include rentals</span><span class="s">Titles you can rent or buy, tagged Rent. Remembered for next time.</span></span><span class="sw" aria-checked="${rentals}"></span></button></div>`;
   }
   // quality
   const sw = (key, title, sub) => `<button class="item" data-act="gs-way" data-val="${key}" role="switch" aria-checked="${a[key]}"><span class="l"><span class="t">${title}</span><span class="s">${sub}</span></span><span class="sw" aria-checked="${a[key]}"></span></button>`;
