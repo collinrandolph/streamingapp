@@ -205,7 +205,7 @@ async function screenMyList(rid) {
         <a href="#/title/${t.kind}/${t.id}" style="display:flex;gap:12px;align-items:center;color:inherit" class="${t.faded ? 'faded' : ''}">
           <span class="thumb" style="width:40px;flex:0 0 40px;aspect-ratio:2/3;border-radius:6px;overflow:hidden;background:var(--surface-2);${t.faded ? 'opacity:.45;filter:grayscale(1)' : ''}">${t.poster ? `<img src="${img(t.poster, 'w92')}" alt="" style="width:100%;height:100%;object-fit:cover">` : ''}</span>
           <span style="display:flex;flex-direction:column;gap:4px;min-width:0"><span style="font-size:15px;font-weight:600">${esc(t.name)}</span><span style="font-size:12px;color:var(--muted)">${t.kind === 'tv' ? 'Series' : 'Movie'}${t.year ? ' · ' + esc(t.year) : ''}</span>${badgeHtml(t.badge, t.more)}</span>
-        </a>${seg(t)}</div>`).join('')}</div>`).join('')
+        </a><div class="row-actions">${seg(t)}<button class="link-btn" data-act="remove-list" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}" aria-label="Remove ${esc(t.name)} from My List">Remove</button></div></div>`).join('')}</div>`).join('')
       : '<p class="empty">Nothing here yet. Add titles from a service page or search.</p>');
 }
 
@@ -307,6 +307,7 @@ async function screenTitle(rid, kind, id) {
     ${t.overview ? `<p class="overview clamp" data-act="expand">${esc(t.overview)}</p>` : ''}
     <div class="pad" style="margin-top:14px">
       <button class="btn-secondary" data-act="title-status" data-val="${statusVal}">${statusLabel}</button>
+      ${e ? `<button class="link-btn" style="margin-top:6px" data-act="remove-list" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}">Remove from My List</button>` : ''}
       <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Play on TV comes after the Roku launch test.</p>
     </div>
     ${nextHtml}
@@ -491,6 +492,12 @@ document.addEventListener('click', async (ev) => {
         location.hash = '#/service/' + encodeURIComponent(q.queue[q.idx]);
       } else finishSetup();
       return;
+    }
+
+    if (act === 'remove-list') {
+      await api('/library', { op: 'remove', kind: el.dataset.kind, id: el.dataset.id });
+      toast('Removed ' + el.dataset.name + ' from My List');
+      return route();
     }
 
     if (act === 'set-status') {
