@@ -76,6 +76,13 @@ db.exec(`
     dismissed INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (kind, tmdb_id)
   );
+  -- Saved Good Stuff searches: a name and the guided flow's answers as JSON.
+  CREATE TABLE IF NOT EXISTS good_profile (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    filters TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 // Columns added after the first release. pstate = where a started show stands (watching, waiting, caught, done).

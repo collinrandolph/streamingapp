@@ -198,7 +198,8 @@ async function screenService(rid, fam) {
     </div>
     <div id="svc-results"></div>
     <div id="svc-rows">
-      ${data.rows.map((r) => `<h2 class="sec" style="font-size:16px">${esc(r.title)}</h2><div class="hs">${r.items.map((t) => card(t, { badge: svcBadge })).join('')}</div>`).join('')}
+      ${data.rows.map((r) => `<h2 class="sec" style="font-size:18px;margin-bottom:4px">${esc(r.title)}</h2>
+        ${[['Shows', r.shows], ['Movies', r.movies]].filter(([, list]) => list.length).map(([label, list]) => `<h3 class="sub-sec">${label}</h3><div class="hs">${list.map((t) => card(t, { badge: svcBadge })).join('')}</div>`).join('')}`).join('')}
     </div>
     ${inSetup ? `<div class="footer-bar"><button class="skip" data-act="setup-skip">Skip setup</button><button class="btn-primary" data-act="setup-next">${hasNext ? 'Next: ' + esc(nameOf(q.queue[q.idx + 1])) : 'Finish setup'}</button></div>` : ''}`;
 }
@@ -322,84 +323,6 @@ async function screenTrackedTitle(rid, kind, id) {
     <div class="pad" style="margin:18px 0"><button class="btn-secondary" data-act="track-stop" data-kind="${m.kind}" data-id="${m.id}">Stop tracking</button></div>`;
 }
 
-// Good Stuff filters are remembered on this device only.
-function loadGoodFilters() {
-  try { return JSON.parse(localStorage.getItem('good') || 'null') || {}; } catch (e) { return {}; }
-}
-function saveGoodFilters() {
-  try { localStorage.setItem('good', JSON.stringify(state.good)); } catch (e) { /* not saved */ }
-}
-const DECADES = [['', 'Any decade'], ['2020', '2020s'], ['2010', '2010s'], ['2000', '2000s'], ['1990', '1990s'], ['1980', '1980s'], ['1970', '1970s'], ['older', 'Before 1970']];
-
-async function screenGood(rid) {
-  renderNav('good', true);
-  if (!state.good) state.good = { genre: '', decade: '', person: null, studio: null, rentals: false, ...loadGoodFilters() };
-  $view.innerHTML = header('Good Stuff') + `
-    <p class="hint">Well reviewed by your thresholds, or notable for awards, cult status or trending. Titles on My List are left out.</p>
-    <div id="good-filters"></div>
-    <div class="pad" style="margin:14px 0 4px"><button class="btn-primary" data-act="pick3">Pick 3 for me</button></div>
-    <div id="pick3"></div>
-    <div id="good-results"><p class="loading">Finding good stuff…</p></div>`;
-  return loadGood(rid);
-}
-
-function goodFiltersHtml(genres) {
-  const g = state.good;
-  const chip = (act, val, label, on) => `<button class="chip" data-act="${act}" data-val="${esc(val)}" aria-pressed="${on}">${esc(label)}</button>`;
-  const pickChip = (type, label) => {
-    const v = g[type];
-    return v ? `<button class="chip" data-act="good-clear" data-type="${type}" aria-pressed="true">${esc(v.name)} ✕</button>`
-      : `<button class="chip" data-act="good-find" data-type="${type}" aria-pressed="false">+ ${label}</button>`;
-  };
-  return `<div class="chips" style="margin-bottom:8px">${chip('good-genre', '', 'Any genre', !g.genre)}${genres.map((x) => chip('good-genre', x.name, x.name, g.genre === x.name)).join('')}</div>
-    <div class="chips" style="margin-bottom:8px">${DECADES.map(([v, l]) => chip('good-decade', v, l, (g.decade || '') === v)).join('')}</div>
-    <div class="chips">${pickChip('person', 'Person')}${pickChip('studio', 'Studio')}${chip('good-rentals', '', 'Include rentals', !!g.rentals)}<button class="chip" data-act="good-thresholds" aria-pressed="false">Thresholds</button></div>`;
-}
-
-async function loadGood(rid) {
-  const g = state.good;
-  const box = document.getElementById('good-results');
-  box.innerHTML = '<p class="loading">Finding good stuff…</p>';
-  document.getElementById('pick3').innerHTML = '';
-  const qs = new URLSearchParams();
-  if (g.genre) qs.set('genre', g.genre);
-  if (g.decade) qs.set('decade', g.decade);
-  if (g.person) qs.set('person', g.person.id);
-  if (g.studio) qs.set('studio', g.studio.id);
-  if (g.rentals) qs.set('rentals', '1');
-  try {
-    const d = await api('/good?' + qs);
-    if (rid !== state.renderId) return;
-    state.goodItems = d.items;
-    state.goodSettings = d.settings;
-    document.getElementById('good-filters').innerHTML = goodFiltersHtml(d.genres);
-    box.innerHTML = d.items.length
-      ? `<h2 class="sec" style="font-size:16px">Results <span class="count">${d.items.length}</span></h2><div class="grid">${d.items.map((t) => card({ ...t, sub: t.reason })).join('')}</div>`
-      : '<p class="empty" style="margin-top:12px">Nothing matches these filters. Try fewer filters, include rentals, or lower your thresholds.</p>';
-  } catch (e) { if (rid === state.renderId) box.innerHTML = errorHtml(e); }
-}
-
-function renderPick3() {
-  const items = [...(state.goodItems || [])];
-  const box = document.getElementById('pick3');
-  if (!items.length) { box.innerHTML = '<p class="empty">Nothing to pick from with these filters.</p>'; return; }
-  const picks = [];
-  while (picks.length < 3 && items.length) picks.push(items.splice(Math.floor(Math.random() * items.length), 1)[0]);
-  box.innerHTML = `<div class="pick3"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h2 style="margin:0;font-size:16px">Your three</h2><button class="chip" data-act="pick3">Re-roll</button></div>
-    <div class="grid" style="padding:0">${picks.map((t) => card({ ...t, sub: t.reason })).join('')}</div></div>`;
-}
-
-function openThresholds() {
-  const s = state.goodSettings;
-  const field = (k, label, step, disabled) => `<label class="lbl" for="th-${k}">${label}</label><input id="th-${k}" class="search" type="number" inputmode="decimal" step="${step}" value="${s[k]}" ${disabled ? 'disabled' : ''} style="margin-bottom:12px">`;
-  openSheet(`<h2>Well-reviewed thresholds</h2>
-    <p>A title counts as well reviewed if it clears any one of these. Notable titles (awards, cult status, trending) get in regardless.</p>
-    ${field('minTmdb', 'TMDb rating at least', '0.1')}${field('minVotes', 'with at least this many TMDb votes', '50')}
-    ${field('minRt', 'Rotten Tomatoes at least (%)', '1', !s.hasOmdb)}${field('minMc', 'Metacritic at least', '1', !s.hasOmdb)}
-    ${s.hasOmdb ? '' : '<p>Rotten Tomatoes and Metacritic need a free OMDb key in config.local.json as "omdbKey".</p>'}
-    <button class="btn-primary" data-act="thresholds-save">Save</button>`);
-}
-
 async function screenSearch(rid) {
   renderNav(null, true);
   $view.innerHTML = `<a class="back" href="javascript:history.back()">‹ Back</a>
@@ -424,7 +347,20 @@ async function runSearch(input) {
   try {
     const data = await api('/search?q=' + encodeURIComponent(q) + (fam ? '&service=' + encodeURIComponent(fam) : ''));
     if (input.value !== q) return;
-    out.innerHTML = data.results.length ? `<div class="grid" style="margin-top:12px">${data.results.map((t) => card(t)).join('')}</div>` : '<p class="empty" style="margin-top:12px">No matches.</p>';
+    if (fam) {
+      out.innerHTML = data.results.length ? `<div class="grid" style="margin-top:12px">${data.results.map((t) => card(t)).join('')}</div>` : '<p class="empty" style="margin-top:12px">No matches.</p>';
+      return;
+    }
+    const titles = data.results.length ? `<h3 class="sub-sec">Titles</h3><div class="grid">${data.results.map((t) => card(t)).join('')}</div>` : '';
+    const people = data.people.length ? `<h3 class="sub-sec">People</h3><div class="people">${data.people.map((p) => `<a class="person" href="#/person/${p.id}"><span class="face">${p.photo ? `<img src="${img(p.photo, 'w185')}" alt="" loading="lazy">` : esc(initials(p.name))}</span><span class="n">${esc(p.name)}</span><span class="r">${esc(p.known)}</span></a>`).join('')}</div>` : '';
+    const cols = data.collections.length ? `<h3 class="sub-sec">Collections</h3><div class="hs">${data.collections.map((c) => `<div class="card"><a class="poster" href="#/collection/${c.id}" aria-label="${esc(c.name)}">${c.poster ? `<img src="${img(c.poster, 'w342')}" alt="" loading="lazy">` : `<span class="ph">${esc(c.name)}</span>`}</a><div class="meta"><div class="name">${esc(c.name)}</div><div class="sub">Collection</div></div></div>`).join('')}</div>` : '';
+    const studios = data.studios.length ? `<h3 class="sub-sec">Studios</h3><div class="pad"><div class="panel">${data.studios.map((s) => `<a class="item" href="#/studio/${s.id}"><span style="display:flex;align-items:center;gap:12px;min-width:0">${s.logo ? `<img src="${img(s.logo, 'w92')}" alt="" style="width:44px;height:28px;object-fit:contain;background:#fff;border-radius:4px;padding:2px;flex:none">` : '<span style="width:44px;flex:none"></span>'}<span class="l"><span class="t">${esc(s.name)}</span><span class="s">Studio${s.country ? ' · ' + esc(s.country) : ''}</span></span></span><span style="color:var(--accent);font-size:18px">›</span></a>`).join('')}</div></div>` : '';
+    // An exact name match ("A24", "Pixar", "Zendaya") moves its section above the titles.
+    const exact = (list) => list.some((x) => x.name.toLowerCase() === q.trim().toLowerCase());
+    // A title with that exact name still wins ("Dune" the film over a company called Dune).
+    const first = exact(data.results) ? [] : exact(data.studios) ? [studios] : exact(data.collections) ? [cols] : data.personFirst || exact(data.people) ? [people] : [];
+    const parts = [...first, ...[titles, people, cols, studios].filter((p) => !first.includes(p))];
+    out.innerHTML = parts.join('') || '<p class="empty" style="margin-top:12px">No matches.</p>';
   } catch (e) { out.innerHTML = errorHtml(e); }
 }
 
@@ -594,7 +530,9 @@ async function route() {
     if (p0 === 'services') return await screenServices(rid);
     if (p0 === 'tracked' && p1 && p2) return await screenTrackedTitle(rid, p1, p2);
     if (p0 === 'tracked') return await screenTracked(rid);
-    if (p0 === 'good') return await screenGood(rid);
+    if (p0 === 'good' && p1 === 'step' && p2) return await screenGoodStep(rid, p2);
+    if (p0 === 'good' && p1 === 'results') return await screenGoodResults(rid);
+    if (p0 === 'good') { goodStart(); return; }
     if (p0 === 'search') return await screenSearch(rid);
     if (p0 === 'title' && p1 && p2) return await screenTitle(rid, p1, p2);
     if (p0 === 'person' && p1) return await screenPerson(rid, p1);
@@ -671,40 +609,6 @@ document.addEventListener('click', async (ev) => {
     }
     if (act === 'upd-manage') return openManageSheet(state.updates[el.dataset.key]);
 
-    if (act === 'good-genre' || act === 'good-decade' || act === 'good-rentals' || act === 'good-clear') {
-      const g = state.good;
-      if (act === 'good-genre') g.genre = el.dataset.val;
-      if (act === 'good-decade') g.decade = el.dataset.val;
-      if (act === 'good-rentals') g.rentals = !g.rentals;
-      if (act === 'good-clear') g[el.dataset.type] = null;
-      saveGoodFilters();
-      return loadGood(state.renderId);
-    }
-    if (act === 'good-find') {
-      const type = el.dataset.type;
-      openSheet(`<h2>Filter by ${type === 'person' ? 'a person' : 'a studio'}</h2>
-        <p>${type === 'person' ? 'Anyone in the cast or crew.' : 'Any studio or production company.'}</p>
-        <input class="search" type="search" data-find="${type === 'person' ? 'person' : 'company'}" placeholder="${type === 'person' ? 'Greta Gerwig, Pedro Pascal…' : 'A24, Pixar, Ghibli…'}" autofocus>
-        <div id="find-results" class="panel" style="margin-top:10px"></div>`);
-      $sheet.querySelector('input').focus();
-      return;
-    }
-    if (act === 'good-pick') {
-      state.good[el.dataset.type] = { id: Number(el.dataset.id), name: el.dataset.name };
-      saveGoodFilters();
-      closeSheet();
-      return loadGood(state.renderId);
-    }
-    if (act === 'pick3') return renderPick3();
-    if (act === 'good-thresholds') return openThresholds();
-    if (act === 'thresholds-save') {
-      const body = {};
-      for (const k of ['minTmdb', 'minVotes', 'minRt', 'minMc']) { const i = document.getElementById('th-' + k); if (i && !i.disabled) body[k] = i.value; }
-      await api('/good/settings', body);
-      closeSheet();
-      toast('Thresholds saved');
-      return loadGood(state.renderId);
-    }
     if (act === 'back') return history.length > 1 ? history.back() : (location.hash = '#/watching');
     if (act === 'expand') return el.classList.toggle('clamp');
 
@@ -844,20 +748,6 @@ document.addEventListener('input', (ev) => {
   if (el.dataset.search) {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => runSearch(el), 350);
-  }
-  if (el.dataset.find) {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(async () => {
-      const out = document.getElementById('find-results');
-      const q = el.value;
-      if (!q.trim()) { out.innerHTML = ''; return; }
-      try {
-        const r = await api('/find/' + el.dataset.find + '?q=' + encodeURIComponent(q));
-        if (el.value !== q) return;
-        const type = el.dataset.find === 'person' ? 'person' : 'studio';
-        out.innerHTML = r.results.map((x) => `<button class="item" data-act="good-pick" data-type="${type}" data-id="${x.id}" data-name="${esc(x.name)}"><span class="l"><span class="t">${esc(x.name)}</span><span class="s">${esc(x.sub)}</span></span></button>`).join('') || '<p class="empty" style="padding:12px 0">No matches.</p>';
-      } catch (e) { out.innerHTML = errorHtml(e); }
-    }, 300);
   }
   if (el.dataset.filter === 'others') {
     const q = el.value.trim().toLowerCase();

@@ -302,11 +302,11 @@ async function servicePage(fam) {
       tmdb.get('/discover/movie?' + r.movie + base, DAY / 2),
       tmdb.get('/discover/tv?' + r.tv + base, DAY / 2)
     ]);
-    const mi = (m.results || []).map((x) => summarize(x, 'movie'));
-    const ti = (tv.results || []).map((x) => summarize(x, 'tv'));
-    const merged = [];
-    for (let i = 0; i < 20; i++) { if (ti[i]) merged.push(ti[i]); if (mi[i]) merged.push(mi[i]); }
-    out.push({ title: r.title, items: withListFlags(merged.slice(0, 24)) });
+    out.push({
+      title: r.title,
+      shows: withListFlags((tv.results || []).map((x) => summarize(x, 'tv'))),
+      movies: withListFlags((m.results || []).map((x) => summarize(x, 'movie')))
+    });
   }
   return { service: { family: svc.family, name: svc.name, logo: svc.logo }, rows: out };
 }
@@ -324,13 +324,32 @@ async function availabilityFor(items) {
   }));
 }
 
+// Titles, plus (outside a service page) the things you can follow: people, collections and studios.
+// People come back in the same /search/multi call; collections and studios cost one call each.
 async function search(q, fam) {
-  if (!q || !q.trim()) return { results: [] };
-  const r = await tmdb.get('/search/multi?include_adult=false&query=' + encodeURIComponent(q.trim()), 3600);
-  let items = (r.results || []).filter((x) => x.media_type === 'movie' || x.media_type === 'tv').slice(0, 15).map((x) => summarize(x));
+  if (!q || !q.trim()) return { results: [], people: [], collections: [], studios: [] };
+  const query = encodeURIComponent(q.trim());
+  const [r, cols, cos] = await Promise.all([
+    tmdb.get('/search/multi?include_adult=false&query=' + query, 3600),
+    fam ? null : tmdb.get('/search/collection?query=' + query, 3600).catch(() => null),
+    fam ? null : tmdb.get('/search/company?query=' + query, 3600).catch(() => null)
+  ]);
+  const all = r.results || [];
+  let items = all.filter((x) => x.media_type === 'movie' || x.media_type === 'tv').slice(0, 15).map((x) => summarize(x));
   items = await availabilityFor(items);
-  if (fam) items = items.filter((t) => t.yours.includes(fam) || (t.badge && family(t.badge.label || '') === fam));
-  return { results: withListFlags(items) };
+  if (fam) {
+    items = items.filter((t) => t.yours.includes(fam) || (t.badge && family(t.badge.label || '') === fam));
+    return { results: withListFlags(items), people: [], collections: [], studios: [] };
+  }
+  const people = all.filter((x) => x.media_type === 'person' && (x.popularity || 0) >= 1).slice(0, 8)
+    .map((x) => ({ id: x.id, name: x.name, photo: x.profile_path || null, known: x.known_for_department || '' }));
+  const collections = ((cols && cols.results) || []).filter((x) => x.poster_path && x.name.length > 2).slice(0, 6).map((x) => ({ id: x.id, name: x.name, poster: x.poster_path || null }));
+  // Company search returns many tiny namesakes; ones with a logo are usually the real studio.
+  const studios = ((cos && cos.results) || []).sort((a, b) => (!!b.logo_path - !!a.logo_path)).slice(0, 5)
+    .map((x) => ({ id: x.id, name: x.name, logo: x.logo_path || null, country: x.origin_country || '' }));
+  // Put people first when TMDb ranks a person as the best match ("Zendaya", "Greta Gerwig").
+  const personFirst = all[0] && all[0].media_type === 'person';
+  return { results: withListFlags(items), people, collections, studios, personFirst };
 }
 
 async function title(kind, id) {
@@ -649,7 +668,18 @@ async function handle(method, path, query, body) {
   if (method === 'GET' && a === 'tracked') return tracking.list();
   if (method === 'GET' && a === 'good' && b === 'settings') return good.settings();
   if (method === 'POST' && a === 'good' && b === 'settings') return good.saveSettings(body || {});
-  if (method === 'GET' && a === 'good') return good.list({ genre: query.get('genre'), decade: query.get('decade'), person: query.get('person'), studio: query.get('studio'), rentals: query.get('rentals') === '1' });
+  if (method === 'GET' && a === 'good' && b === 'genres') return good.genres();
+  if (method === 'GET' && a === 'good' && b === 'profiles') return good.profiles();
+  if (method === 'POST' && a === 'good' && b === 'profiles') return good.saveProfile(body || {});
+  if (method === 'POST' && a === 'good' && b === 'profiles-delete') return good.deleteProfile(body || {});
+  if (method === 'GET' && a === 'good') {
+    return good.list({
+      kinds: (query.get('kinds') || '').split(',').filter(Boolean), genres: (query.get('genres') || '').split(',').filter(Boolean), keywords: (query.get('keywords') || '').split(',').filter(Boolean).map(Number), leave: (query.get('leave') || '').split(',').filter(Boolean),
+      services: (query.get('services') || '').split(',').filter(Boolean), from: query.get('from'), to: query.get('to'), min: query.get('min'),
+      awards: query.get('awards') !== '0', cult: query.get('cult') !== '0', trending: query.get('trending') !== '0',
+      person: query.get('person'), studio: query.get('studio')
+    });
+  }
   if (method === 'GET' && a === 'find' && (b === 'person' || b === 'company')) return good.find(b, query.get('q'));
   throw Object.assign(new Error('Not found'), { status: 404 });
 }
