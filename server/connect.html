@@ -83,8 +83,11 @@
     $('qr').innerHTML = '<span class="warn">The QR code needs an internet connection to draw. Use the link below instead.</span>';
   }
 
-  const showKeys = (k) => {
-    $('key-state').textContent = k.tmdb ? 'Saved on this PC ✓ (paste a new one to replace it)' : 'Not set yet. The app needs one to look up shows and movies.';
+  const showKeys = (k, justSaved) => {
+    const when = k.savedAt ? new Date(k.savedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+    $('key-state').textContent = !k.tmdb ? 'Not set yet. The app needs one to look up shows and movies.'
+      : `${justSaved ? 'Saved just now' : 'Saved'} ✓  ${k.hint}${when ? '  ·  ' + when : ''}`;
+    $('key-state').style.color = justSaved ? '#6FD39B' : '';
   };
   showKeys(info.keys);
   $('save-key').addEventListener('click', async () => {
@@ -94,7 +97,7 @@
     const k = await r.json();
     if (!r.ok) return alert(k.error);
     $('tmdb').value = '';
-    showKeys(k);
+    showKeys(k, true);
   });
 
   const sw = $('startup');

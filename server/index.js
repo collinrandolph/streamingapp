@@ -1,6 +1,7 @@
 // HTTP server: the PC helper. Serves the web app (web/), the shared data code (/core/), the Connect page
 // with the QR code (/connect), and the PC-only API: the Roku, your list for copying to the phone, the keys.
 // Packaged as StreamingTracker-PC.exe it opens the Connect page on start (unless started with --background).
+const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { exec } = require('child_process');
@@ -22,6 +23,14 @@ const TYPES = {
   '.json': 'application/json',
   '.webmanifest': 'application/manifest+json'
 };
+
+// What the Connect page shows about the saved keys: set or not, a recognisable hint, and when it was saved.
+function keyStatus(c) {
+  const t = c.tmdbToken || '';
+  let savedAt = null;
+  try { savedAt = fs.statSync(config.CONFIG_FILE).mtimeMs; } catch (e) { /* no file yet */ }
+  return { tmdb: !!t, omdb: !!c.omdbKey, hint: t ? t.slice(0, 6) + '…' + t.slice(-4) : '', savedAt };
+}
 
 function sendJson(res, status, data) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -60,14 +69,14 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/connect') return sendFile(res, 'connect.html', assets.read('connect.html'));
   if (url.pathname === '/api/connect') {
     const c = config.load();
-    return sendJson(res, 200, { ...pc.info(PORT), link: pc.pairLink(PORT), app: pc.APP_URL, startup: pc.startup(), relay: relay.state.connected, keys: { tmdb: !!c.tmdbToken, omdb: !!c.omdbKey } });
+    return sendJson(res, 200, { ...pc.info(PORT), link: pc.pairLink(PORT), app: pc.APP_URL, startup: pc.startup(), relay: relay.state.connected, keys: keyStatus(c) });
   }
   // Keys are typed in on the PC itself (the Connect page); other devices on the network can't change them.
   if (url.pathname === '/api/keys' && req.method === 'POST') {
     if (!/^(::1|127\.|::ffff:127\.)/.test(req.socket.remoteAddress || '')) return sendJson(res, 403, { error: 'Keys can only be changed on the PC itself.' });
     try {
       const c = config.saveKeys(await readJson(req));
-      return sendJson(res, 200, { tmdb: !!c.tmdbToken, omdb: !!c.omdbKey });
+      return sendJson(res, 200, keyStatus(c));
     } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
   }
   if (url.pathname === '/api/startup' && req.method === 'POST') {

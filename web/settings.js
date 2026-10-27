@@ -68,8 +68,8 @@ function screenPair() {
     <p class="hint" id="pair-keys" style="margin-top:16px"></p>
     ${pc.addrs.length > 1 ? `<p class="hint" style="margin-top:8px">This PC has ${pc.addrs.length} addresses. If Watch on TV can't reach it, pick another in Settings.</p>` : ''}
   </div>`;
-  // No TMDb key on this phone yet: ask the PC for its key.
-  if (!state.core.settings().tmdbToken && pc.relay) {
+  // The PC's key is the one to use: take it, replacing any key typed in on this phone.
+  if (pc.relay) {
     const note = document.getElementById('pair-keys');
     note.textContent = 'Getting the TMDb key from ' + pc.name + '…';
     fetchKeysFromPc(pc).then((msg) => { note.textContent = msg; }, (e) => { note.textContent = e.message; });

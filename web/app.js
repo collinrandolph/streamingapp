@@ -610,7 +610,9 @@ async function route() {
     if (!state.status) state.status = await api('/status');
     if (!state.status.hasKey) {
       renderNav(null, false);
-      $view.innerHTML = '<div style="padding:28px 16px 0"><h1 style="margin:0;font-size:26px">Streaming Tracker</h1></div>' + errorHtml({ status: 503 });
+      const pc = typeof activePc === 'function' ? activePc() : null;
+      $view.innerHTML = '<div style="padding:28px 16px 0"><h1 style="margin:0;font-size:26px">Streaming Tracker</h1></div>' + errorHtml({ status: 503 })
+        + (pc && pc.relay ? `<div class="pad" style="margin-top:14px"><button class="btn-primary" data-act="set-pc-keys">Get the TMDb key from ${esc(pc.name)}</button></div>` : '');
       return;
     }
     const [p0, p1, p2] = parts;
