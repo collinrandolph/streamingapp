@@ -203,33 +203,89 @@ async function screenWatching(rid) {
   $view.innerHTML = header('Watching') + '<p class="loading">Loading…</p>';
   const w = await api('/watching');
   if (rid !== state.renderId) return;
+  const panelRow = (t) => `<a class="item" href="#/title/${t.kind}/${t.id}"><span class="l"><span class="t">${esc(t.name)}</span><span class="s">${esc(t.line)}</span></span>${badgeHtml(t.badge, 0)}</a>`;
+  const posters = (items, sub, opts) => `<div class="hs">${items.map((t) => card({ ...t, sub: sub(t) }, opts)).join('')}</div>`;
+  const unwatched = (s) => `${s.unwatched} unwatched episode${s.unwatched === 1 ? '' : 's'}`;
+  state.updFeed = null;
+  // Each section draws itself as a list or a carousel; the toggle in its heading redraws just that section.
+  state.sections = {
+    shows: (v) => !w.shows.length ? '<p class="empty">Nothing unwatched. Start a show and pick your episode on its page.</p>'
+      : v === 'list' ? `<div class="pad">${w.shows.map((s) => rowCard(s, 'Next up · ' + s.next, `<span class="line" style="font-size:12px;color:var(--muted)">${unwatched(s)}</span>`)).join('')}</div>`
+      : posters(w.shows, (s) => `Next up · ${s.next} · ${unwatched(s)}`, { noAdd: true }),
+    movies: (v) => !w.movies.length ? '<p class="empty">No unwatched movies from My List are on your services.</p>'
+      : v === 'list' ? `<div class="pad">${w.movies.map((m) => rowCard(m, m.year)).join('')}</div>`
+      : posters(w.movies, (m) => m.year, { noAdd: true }),
+    coming: (v) => !w.coming.length ? '<p class="empty">Nothing scheduled in the next 10 days.</p>'
+      : v === 'list' ? `<div class="pad"><div class="panel">${w.coming.map(panelRow).join('')}</div></div>`
+      : posters(w.coming, (c) => c.line, { noAdd: true }),
+    updates: (v) => {
+      const f = state.updFeed;
+      const seasons = w.updates.length ? `<h3 class="sub-sec">New seasons</h3>${v === 'list' ? `<div class="pad"><div class="panel">${w.updates.map(panelRow).join('')}</div></div>` : posters(w.updates, (u) => u.line, { noAdd: true })}` : '';
+      if (!f) return seasons + '<p class="loading">Checking what you follow…</p>';
+      if (f.error) return seasons + errorHtml(f.error);
+      state.updates = {};
+      const groups = f.groups.map((g) => `<h3 class="sub-sec">${esc(g.label)} <span class="count">${g.items.length}</span></h3>${v === 'list'
+        ? `<div class="pad">${g.items.map(updateRow).join('')}</div>`
+        : posters(g.items.map((u) => { state.updates[u.kind + ':' + u.id] = u; return u; }), (u) => u.reason)}`).join('');
+      if (groups || seasons) return seasons + groups;
+      return `<p class="empty">${f.hasRules ? 'Nothing new from what you follow in the last 90 days.' : 'Follow a person, franchise or studio from its page, and their new releases appear here. New seasons of shows you\'re caught up on show up here too.'}</p>`;
+    }
+  };
   $view.innerHTML = header('Watching') + `
-    <h2 class="sec">Shows</h2>
-    ${w.shows.length ? `<div class="pad">${w.shows.map((s) => rowCard(s, 'Next up · ' + s.next, `<span class="line" style="font-size:12px;color:var(--muted)">${s.unwatched} unwatched episode${s.unwatched === 1 ? '' : 's'}</span>`)).join('')}</div>` : '<p class="empty">Nothing unwatched. Set a show to Active and pick your episode on its page.</p>'}
-    <h2 class="sec">Movies</h2>
-    ${w.movies.length ? `<div class="hs">${w.movies.map((m) => card({ ...m, onList: true }, { noAdd: true })).join('')}</div>` : '<p class="empty">No unwatched movies from My List are on your services.</p>'}
-    <h2 class="sec" style="margin-bottom:4px">Coming soon</h2>
-    <p class="hint" style="margin-top:0">Episodes of your active shows in the next 10 days</p>
-    ${w.coming.length ? `<div class="pad"><div class="panel">${w.coming.map((c) => `<a class="item" href="#/title/${c.kind}/${c.id}"><span class="l"><span class="t">${esc(c.name)}</span><span class="s">${esc(c.line)}</span></span>${badgeHtml(c.badge, 0)}</a>`).join('')}</div></div>` : '<p class="empty">Nothing scheduled in the next 10 days.</p>'}
+    ${secHead('Shows', 'shows')}${secBody('shows')}
+    ${secHead('Movies', 'movies')}${secBody('movies')}
+    ${secHead('Coming soon', 'coming', 'margin-bottom:4px')}
+    <p class="hint" style="margin-top:0">Episodes of your started shows in the next 10 days</p>
+    ${secBody('coming')}
     <div style="margin:28px 16px 0;border-top:1px solid var(--line)"></div>
-    <h2 class="sec">Updates</h2>
-    ${w.updates.length ? `<h3 class="sub-sec">New seasons</h3><div class="pad"><div class="panel">${w.updates.map((u) => `<a class="item" href="#/title/${u.kind}/${u.id}"><span class="l"><span class="t">${esc(u.name)}</span><span class="s">${esc(u.line)}</span></span>${badgeHtml(u.badge, 0)}</a>`).join('')}</div></div>` : ''}
-    <div id="updates"><p class="loading">Checking what you track…</p></div>`;
-  loadUpdates(rid, w.updates.length > 0);
+    ${secHead('Updates', 'updates')}${secBody('updates')}`;
+  loadUpdates(rid);
 }
 
-async function loadUpdates(rid, hasSeasons) {
-  const box = document.getElementById('updates');
+async function loadUpdates(rid) {
   try {
     const f = await api('/updates');
     if (rid !== state.renderId) return;
-    state.updates = {};
-    if (!f.groups.length) {
-      box.innerHTML = hasSeasons ? '' : `<p class="empty">${f.hasRules ? 'Nothing new from what you follow in the last 90 days.' : 'Follow a person, franchise or studio from its page, and their new releases appear here. New seasons of shows you\'re caught up on show up here too.'}</p>`;
-      return;
-    }
-    box.innerHTML = f.groups.map((g) => `<h3 class="sub-sec">${esc(g.label)} <span class="count">${g.items.length}</span></h3><div class="pad">${g.items.map(updateRow).join('')}</div>`).join('');
-  } catch (e) { box.innerHTML = errorHtml(e); }
+    state.updFeed = f;
+  } catch (e) {
+    if (rid !== state.renderId) return;
+    state.updFeed = { error: e };
+  }
+  redrawSection('updates');
+}
+
+// Watching sections show as a list or a poster carousel. The choice is remembered per section on this device.
+const VIEW_DEFAULTS = { shows: 'list', movies: 'carousel', coming: 'list', updates: 'list' };
+const VIEW_ICONS = {
+  list: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
+  carousel: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="7" height="14" rx="1.5"/><rect x="14" y="5" width="7" height="14" rx="1.5"/></svg>'
+};
+function viewOf(key) {
+  try { return JSON.parse(localStorage.getItem('views') || '{}')[key] || VIEW_DEFAULTS[key]; } catch (e) { return VIEW_DEFAULTS[key]; }
+}
+function setView(key, v) {
+  try {
+    const all = JSON.parse(localStorage.getItem('views') || '{}');
+    all[key] = v;
+    localStorage.setItem('views', JSON.stringify(all));
+  } catch (e) { /* remembered for this visit only */ }
+  state.viewOverride = { ...(state.viewOverride || {}), [key]: v };
+}
+function currentView(key) { return (state.viewOverride && state.viewOverride[key]) || viewOf(key); }
+// The button shows the view you'd switch to.
+function viewBtn(key, title) {
+  const other = currentView(key) === 'list' ? 'carousel' : 'list';
+  return `<button class="icon-btn view-btn" id="view-${key}" data-act="view-toggle" data-key="${key}" data-title="${esc(title)}" aria-label="Show ${esc(title)} as a ${other}">${VIEW_ICONS[other]}</button>`;
+}
+function secHead(title, key, style) {
+  return `<div class="sec-row"><h2 class="sec" ${style ? `style="${style}"` : ''}>${esc(title)}</h2>${viewBtn(key, title)}</div>`;
+}
+function secBody(key) {
+  return `<div id="sec-${key}">${state.sections[key](currentView(key))}</div>`;
+}
+function redrawSection(key) {
+  const box = document.getElementById('sec-' + key);
+  if (box && state.sections && state.sections[key]) box.innerHTML = state.sections[key](currentView(key));
 }
 
 async function screenMyList(rid) {
@@ -633,6 +689,14 @@ document.addEventListener('click', async (ev) => {
       await api('/library', { op: 'remove', kind: el.dataset.kind, id: el.dataset.id });
       toast('Removed ' + el.dataset.name + ' from My List');
       return route();
+    }
+
+    if (act === 'view-toggle') {
+      const key = el.dataset.key;
+      setView(key, currentView(key) === 'list' ? 'carousel' : 'list');
+      redrawSection(key);
+      el.outerHTML = viewBtn(key, el.dataset.title);
+      return;
     }
 
     if (act === 'list-acc') {

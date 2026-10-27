@@ -46,7 +46,7 @@ h3.grp { margin: 14px 16px 8px; font-size: 13px; font-weight: 600; letter-spacin
 .empty { margin: 0 16px; color: var(--muted); font-size: 14px; line-height: 1.45; }
 
 /* Rows and grids of posters */
-.hs { display: flex; gap: 12px; overflow-x: auto; padding: 0 16px 4px; scrollbar-width: none; scroll-snap-type: x proximity; }
+.hs { display: flex; gap: 12px; overflow-x: auto; padding: 0 16px 4px; scrollbar-width: none; scroll-snap-type: x proximity; scroll-padding-inline: 16px; }
 .hs::-webkit-scrollbar { display: none; }
 .hs .card { width: 112px; flex: 0 0 112px; scroll-snap-align: start; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 10px; padding: 0 16px; }
@@ -241,3 +241,7 @@ h2.sec.acc { margin: 14px 8px 6px; font-size: 16px; }
 .hero-text .badge { font-size: 11.5px; padding: 3px 9px 3px 3px; background: rgba(29, 33, 42, .85); }
 .hero-text .badge.mine { background: rgba(29, 42, 68, .9); }
 .hero-text .badge img { width: 18px; height: 18px; flex-basis: 18px; }
+.sec-row { display: flex; align-items: center; justify-content: space-between; padding-right: 8px; }
+.sec-row h2.sec { flex: 1; }
+.view-btn { width: 40px; height: 40px; color: var(--text-2); }
+.view-btn:hover { color: var(--text); }
