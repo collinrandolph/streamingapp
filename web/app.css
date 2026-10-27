@@ -190,3 +190,15 @@ a.item { color: var(--text); }
 .card .sub { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .pick3 { margin: 6px 16px 4px; padding: 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--accent); }
 .lbl { display: block; }
+.list-row { display: flex; align-items: center; gap: 4px; background: var(--surface); border-radius: 12px; padding: 10px 4px 10px 10px; margin-bottom: 10px; }
+.list-main { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: center; color: var(--text); }
+.list-main .thumb { width: 44px; flex: 0 0 44px; aspect-ratio: 2 / 3; border-radius: 6px; overflow: hidden; background: var(--surface-2); }
+.list-main .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.list-main.faded .thumb { opacity: .45; filter: grayscale(1); }
+.list-main .body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.list-main .title { font-size: 15px; font-weight: 600; }
+.list-main .meta { font-size: 12px; color: var(--muted); }
+.list-main .line { font-size: 12.5px; color: var(--text-2); }
+.more-btn { flex: 0 0 44px; height: 44px; border-radius: 22px; font-size: 20px; font-weight: 700; color: var(--text-2); }
+.more-btn:hover { background: var(--surface-2); }
+.quiet-row { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px; color: var(--muted); }

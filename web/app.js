@@ -246,18 +246,38 @@ async function screenMyList(rid) {
   $view.innerHTML = header('My List') + '<p class="loading">Loading…</p>';
   const data = await api('/mylist');
   if (rid !== state.renderId) return;
-  const seg = (t) => {
-    const opts = t.kind === 'tv' ? [['none', 'Not started'], ['active', t.group === 'caught' ? 'Caught up' : 'Watching'], ['finished', 'Finished']] : [['none', 'Not started'], ['finished', 'Finished']];
-    return `<div class="seg" role="group" aria-label="Status of ${esc(t.name)}">${opts.map(([k, l]) => `<button data-act="set-status" data-kind="${t.kind}" data-id="${t.id}" data-status="${k}" aria-pressed="${t.status === k}">${l}</button>`).join('')}</div>`;
-  };
-  $view.innerHTML = header('My List') + `<p class="hint">Watching: episodes left, aired or dated. Caught up: you've seen everything aired and the next season isn't out. Finished: done for good.</p>` +
+  state.listItems = {};
+  $view.innerHTML = header('My List') + `<p class="hint">Open a title to set your place. Watching: episodes left to watch, aired or announced. Caught up: you've seen everything there is, and the show continues.</p>` +
     (data.groups.length ? data.groups.map((g) => `<h2 class="sec" style="font-size:16px">${esc(g.label)} <span class="count">${g.items.length}</span></h2>
-      <div class="pad">${g.items.map((t) => `<div style="background:var(--surface);border-radius:12px;padding:10px;margin-bottom:10px">
-        <a href="#/title/${t.kind}/${t.id}" style="display:flex;gap:12px;align-items:center;color:inherit" class="${t.faded ? 'faded' : ''}">
-          <span class="thumb" style="width:40px;flex:0 0 40px;aspect-ratio:2/3;border-radius:6px;overflow:hidden;background:var(--surface-2);${t.faded ? 'opacity:.45;filter:grayscale(1)' : ''}">${t.poster ? `<img src="${img(t.poster, 'w92')}" alt="" style="width:100%;height:100%;object-fit:cover">` : ''}</span>
-          <span style="display:flex;flex-direction:column;gap:4px;min-width:0"><span style="font-size:15px;font-weight:600">${esc(t.name)}</span><span style="font-size:12px;color:var(--muted)">${t.kind === 'tv' ? 'Series' : 'Movie'}${t.year ? ' · ' + esc(t.year) : ''}</span>${t.progress ? `<span style="font-size:12.5px;color:var(--text-2)">${esc(t.progress)}</span>` : ''}${badgeHtml(t.badge, t.more)}</span>
-        </a><div class="row-actions">${seg(t)}<button class="link-btn" data-act="remove-list" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}" aria-label="Remove ${esc(t.name)} from My List">Remove</button></div></div>`).join('')}</div>`).join('')
+      <div class="pad">${g.items.map((t) => {
+        state.listItems[t.kind + ':' + t.id] = t;
+        return `<div class="list-row">
+        <a href="#/title/${t.kind}/${t.id}" class="list-main ${t.faded ? 'faded' : ''}">
+          <span class="thumb">${t.poster ? `<img src="${img(t.poster, 'w92')}" alt="">` : ''}</span>
+          <span class="body"><span class="title">${esc(t.name)}</span><span class="meta">${t.kind === 'tv' ? 'Series' : 'Movie'}${t.year ? ' · ' + esc(t.year) : ''}</span>${t.progress ? `<span class="line">${esc(t.progress)}</span>` : ''}${badgeHtml(t.badge, t.more)}</span>
+        </a><button class="more-btn" data-act="row-menu" data-key="${t.kind}:${t.id}" aria-label="More for ${esc(t.name)}">⋯</button></div>`;
+      }).join('')}</div>`).join('')
       : '<p class="empty">Nothing here yet. Add titles from a service page or search.</p>');
+}
+
+// The buttons a title gets, from its state. You set your place on the title page; the app works out the rest.
+function statusActions(kind, status, pstate) {
+  const remove = { op: 'remove', label: 'Remove' };
+  const pause = { op: 'pause', label: 'Pause' };
+  if (!status) return { main: { op: 'add', label: '+ My List' }, quiet: [] };
+  if (status === 'paused') return { main: { op: 'resume', label: 'Resume' }, quiet: [remove] };
+  if (kind === 'movie') {
+    return status === 'finished' ? { main: { op: 'rewatch', label: 'Watch again' }, quiet: [remove] } : { main: { op: 'watched', label: 'Watched it' }, quiet: [pause, remove] };
+  }
+  if (status === 'none') return { main: { op: 'start', label: 'Start watching' }, quiet: [remove] };
+  if (status === 'finished') return { main: { op: 'rewatch', label: 'Rewatch' }, quiet: [remove] };
+  if (pstate === 'caught') return { main: { op: 'rewatch', label: 'Rewatch' }, quiet: [pause, remove] };
+  if (pstate === 'waiting') return { main: null, quiet: [pause, remove] }; // nothing to mark until more episodes air
+  return { main: { op: 'allwatched', label: 'Mark all watched' }, quiet: [pause, remove] };
+}
+
+function opButton(a, t, cls) {
+  return `<button class="${cls}" data-act="lib-op" data-op="${a.op}" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}" data-poster="${esc(t.poster || '')}" data-year="${esc(t.year || '')}" data-place="${esc(t.place || '')}">${esc(a.label)}</button>`;
 }
 
 async function screenServices(rid) {
@@ -428,11 +448,8 @@ async function screenTitle(rid, kind, id) {
   const e = t.entry;
   const status = e ? e.status : null;
   const isTv = kind === 'tv';
-  let statusLabel, statusVal;
-  if (!e) { statusLabel = '+ My List'; statusVal = 'add'; }
-  else if (isTv && status === 'none') { statusLabel = 'Start Watching?'; statusVal = 'active'; }
-  else if (status === 'finished') { statusLabel = 'Watch again?'; statusVal = 'again'; }
-  else { statusLabel = 'Finished?'; statusVal = 'finished'; }
+  const actions = statusActions(kind, status, isTv && t.progress ? t.progress.state : null);
+  const opT = { ...t, place: isTv && e && status !== 'none' ? `S${t.next.s}E${t.next.e}` : '' };
   const ratingsTop = !e || status === 'none';
   const chips = [
     t.collection ? `<a class="link-chip" href="#/collection/${t.collection.id}"><span class="k">Part of</span>${esc(t.collection.name)}<span class="go">›</span></a>` : '',
@@ -442,7 +459,9 @@ async function screenTitle(rid, kind, id) {
   let nextHtml = '';
   if (isTv) {
     const n = t.next;
-    const line = status === 'active' || status === 'finished' ? t.progress.line : `Starts at S${n.s}E${n.e} · ${n.unwatched} episodes aired`;
+    const line = status === 'paused' ? `Paused at S${n.s}E${n.e}`
+      : status === 'active' || status === 'finished' ? `${t.progress.label} · ${t.progress.line}`
+      : `${n.unwatched} episodes aired. Start watching, or tap the episode you're up to.`;
     nextHtml = `<h2 class="sec" style="font-size:16px;margin-bottom:4px">Episodes</h2>
       <p class="hint" style="margin-top:0;font-size:14px;color:var(--text-2)">${esc(line)}</p>
       <div class="chips" id="season-chips">${t.seasons.map((s) => `<button class="chip" data-act="season" data-n="${s.n}" aria-pressed="false">Season ${s.n}</button>`).join('')}</div>
@@ -462,8 +481,8 @@ async function screenTitle(rid, kind, id) {
     </div>
     ${t.overview ? `<p class="overview clamp" data-act="expand">${esc(t.overview)}</p>` : ''}
     <div class="pad" style="margin-top:14px">
-      <button class="btn-secondary" data-act="title-status" data-val="${statusVal}">${statusLabel}</button>
-      ${e ? `<button class="link-btn" style="margin-top:6px" data-act="remove-list" data-kind="${t.kind}" data-id="${t.id}" data-name="${esc(t.name)}">Remove from My List</button>` : ''}
+      ${actions.main ? opButton(actions.main, opT, 'btn-secondary') : ''}
+      ${actions.quiet.length ? `<div class="quiet-row">${actions.quiet.map((a) => opButton(a, opT, 'link-btn')).join('<span aria-hidden="true">·</span>')}</div>` : ''}
       <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Play on TV comes after the Roku launch test.</p>
       <div class="panel" style="margin-top:12px"><button class="item" data-act="track-open" aria-label="Track ${esc(t.name)}"><span class="l"><span class="t">Track</span><span class="s">${t.tracked ? 'On · related new titles come to Updates' : 'Get updates on related titles'}</span></span><span class="sw" aria-checked="${t.tracked}"></span></button></div>
     </div>
@@ -744,19 +763,35 @@ document.addEventListener('click', async (ev) => {
       return route();
     }
 
-    if (act === 'set-status') {
-      await api('/library', { kind: el.dataset.kind, id: el.dataset.id, status: el.dataset.status });
-      return route();
+    if (act === 'row-menu') {
+      const t = state.listItems[el.dataset.key];
+      const a = statusActions(t.kind, t.status, t.pstate);
+      // Starting a show happens on its title page, so the menu leaves Start watching out.
+      const ops = [a.main, ...a.quiet].filter((x) => x && x.op !== 'start');
+      return openSheet(`<h2>${esc(t.name)}</h2><p>${esc(t.progress || (t.kind === 'tv' ? 'Series' : 'Movie'))}</p>
+        <div class="stack">${ops.map((x) => opButton(x, t, 'btn-secondary')).join('')}<a class="btn-secondary" href="#/title/${t.kind}/${t.id}">Open title page</a></div>`);
     }
 
-    if (act === 'title-status') {
-      const t = state.title;
-      const v = el.dataset.val;
-      const base = { kind: t.kind, id: t.id, name: t.name, poster: t.poster, year: t.year };
-      if (v === 'add') { await api('/library', { ...base, op: 'add' }); toast('Added to My List'); }
-      else if (v === 'active') await api('/library', { ...base, status: 'active' });
-      else if (v === 'finished') { await api('/library', { ...base, status: 'finished' }); toast('Marked finished'); }
-      else if (v === 'again') await api('/library', t.kind === 'tv' ? { ...base, status: 'active', s: 1, e: 1 } : { ...base, status: 'none' });
+    if (act === 'lib-op') {
+      const d = el.dataset;
+      const base = { kind: d.kind, id: d.id, name: d.name, poster: d.poster || null, year: d.year };
+      if (d.op === 'remove') {
+        return openSheet(`<h2>Remove ${esc(d.name)}?</h2>
+          <p>${d.place ? `Your place (${esc(d.place)}) will be lost. ` : ''}It also leaves Watching and Coming soon. Pause keeps it instead.</p>
+          <div class="stack"><button class="btn-primary" style="background:#E5484D;color:#fff" data-act="remove-list" data-kind="${d.kind}" data-id="${d.id}" data-name="${esc(d.name)}">Remove from My List</button></div>`);
+      }
+      const res = await api('/library', d.op === 'allwatched' ? { ...base, through: 'all' } : { ...base, op: d.op });
+      closeSheet();
+      const prev = res.prev;
+      const undo = async () => {
+        await api('/library', prev ? { ...base, status: prev.status, s: prev.s, e: prev.e } : { ...base, op: 'remove' });
+        route();
+      };
+      const MSG = { add: 'Added to My List', start: 'Started at S1E1', allwatched: 'Marked every aired episode watched', pause: 'Paused', resume: 'Resumed', rewatch: 'Starting again from the beginning', watched: 'Marked watched' };
+      let msg = `${d.name}: ${MSG[d.op]}`;
+      if (res.autoFinished) msg = `${d.name} is finished. Moved to Finished.`;
+      else if (d.op === 'allwatched' && res.progress) msg += `. ${res.progress.label} · ${res.progress.line}`;
+      toast(msg, d.op === 'add' ? null : undo);
       return route();
     }
 

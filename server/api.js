@@ -126,9 +126,13 @@ async function details(kind, id, ttl = DAY / 2) {
   return tmdb.get('/tv/' + id + '?append_to_response=aggregate_credits,watch/providers,external_ids', ttl);
 }
 
-// How often a show is re-checked depends on where you are in it.
-const REFRESH = { watching: DAY / 2, airing: DAY / 2, between: 7 * DAY, done: 30 * DAY };
-const refreshFor = (r) => REFRESH[r.pstate] || DAY / 2;
+// How often a title is re-checked depends on its state: shows you're watching twice a day,
+// Caught up, Not started and Paused weekly, Finished monthly (to catch revivals).
+function refreshFor(r) {
+  if (r.status === 'none' || r.status === 'paused') return 7 * DAY;
+  if (r.status === 'finished') return 30 * DAY;
+  return { caught: 7 * DAY, done: 30 * DAY }[r.pstate] || DAY / 2;
+}
 
 function shortDate(iso) {
   if (!iso) return '';
@@ -179,27 +183,33 @@ function normalizePos(seasons, s, e) {
   return { s, e };
 }
 
-// Where an Active show stands for you, worked out from TMDb data rather than set by hand.
-// The words you see: Watching (episodes left to watch, aired or with a date), Caught up (nothing
-// left and no next episode dated), Finished (the show has ended and you've seen it all).
-//   watching: aired episodes left                      → Watching
-//   airing:   none left, next episode this season dated → Watching
-//   between:  season over, next season not started yet → Caught up (its premiere date shows if known)
-//   done:     none left and the show ended              → Finished
+// Where a started show stands, worked out from TMDb data. You set your place; the app works out the state.
+//   watching: aired episodes left to watch                          → Watching
+//   waiting:  none left, but more are announced (dated or not)      → Watching
+//   caught:   you've seen everything that exists or is announced    → Caught up
+//   done:     as caught, and the show has ended or been canceled    → Finished (set automatically)
 function progressOf(d, s, e) {
   const seasons = seasonsOf(d);
   const unwatched = unwatchedFrom(seasons, s, e);
   if (unwatched > 0) return { state: 'watching', label: 'Watching', unwatched, line: `Next up · S${s}E${e} · ${unwatched} unwatched` };
-  if (d.status === 'Ended' || d.status === 'Canceled') return { state: 'done', label: 'Finished', line: 'Finished · the show has ended' };
   const na = d.next_episode_to_air;
-  if (na && na.air_date && na.episode_number > 1) {
-    return { state: 'airing', label: 'Watching', date: na.air_date, line: `Watching · S${na.season_number}E${na.episode_number} airs ${shortDate(na.air_date)}` };
-  }
   if (na && na.air_date) {
-    return { state: 'between', label: 'Caught up', date: na.air_date, line: `Caught up · Season ${na.season_number} premieres ${shortDate(na.air_date)}` };
+    const premiere = na.episode_number === 1;
+    return {
+      state: 'waiting', label: 'Watching', date: na.air_date, premiere, season: na.season_number,
+      line: premiere ? `Season ${na.season_number} premieres ${shortDate(na.air_date)}` : `S${na.season_number}E${na.episode_number} airs ${shortDate(na.air_date)}`
+    };
   }
-  const announced = seasons.find((x) => x.aired === 0 && (x.n > s || (x.n === s && e === 1)));
-  return { state: 'between', label: 'Caught up', line: announced ? `Caught up · Season ${announced.n} announced, no date yet` : 'Caught up · no new episodes announced' };
+  const ended = d.status === 'Ended' || d.status === 'Canceled';
+  if (!ended) {
+    // Announced but not dated: a listed season with nothing aired, or more episodes listed than have aired.
+    const newSeason = seasons.find((x) => x.aired === 0 && (x.n > s || (x.n === s && e === 1)));
+    if (newSeason) return { state: 'waiting', label: 'Watching', premiere: true, season: newSeason.n, line: `Season ${newSeason.n} announced, no date yet` };
+    const more = seasons.find((x) => x.aired > 0 && x.count > x.aired);
+    if (more) return { state: 'waiting', label: 'Watching', line: `More of Season ${more.n} coming, no date yet` };
+    return { state: 'caught', label: 'Caught up', line: 'No new episodes announced' };
+  }
+  return { state: 'done', label: 'Finished', line: 'The show has ended' };
 }
 // Saves where a show stands, and closes out (or reopens) shows the app finished by itself.
 function reconcile(r, p) {
@@ -412,19 +422,41 @@ async function library(body) {
     db.prepare('INSERT INTO library (kind, tmdb_id, name, poster, year, added_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(kind, id, body.name || '', body.poster || null, body.year || '', Date.now());
   }
-  if (body.status) db.prepare('UPDATE library SET status = ? WHERE kind = ? AND tmdb_id = ?').run(body.status, kind, id);
-  if (body.s && body.e) db.prepare('UPDATE library SET next_s = ?, next_e = ? WHERE kind = ? AND tmdb_id = ?').run(Number(body.s), Number(body.e), kind, id);
+  const set = (status, s, e) => {
+    db.prepare('UPDATE library SET status = ? WHERE kind = ? AND tmdb_id = ?').run(status, kind, id);
+    if (s && e) db.prepare('UPDATE library SET next_s = ?, next_e = ? WHERE kind = ? AND tmdb_id = ?').run(Number(s), Number(e), kind, id);
+  };
+  // The few things you set by hand. Everything else about a show's state comes from its episodes.
+  const op = body.op;
+  if (op === 'start') set('active', 1, 1);
+  else if (op === 'pause') set('paused');
+  else if (op === 'resume') set(kind === 'tv' ? 'active' : 'none');
+  else if (op === 'rewatch') { if (kind === 'tv') set('active', 1, 1); else set('none'); }
+  else if (op === 'watched') set('finished');
+  else if (body.status) set(body.status, body.s, body.e); // restoring a previous state (Undo)
+  else if (body.s && body.e) set('active', body.s, body.e); // un-marking episodes back to this one
 
-  // Watched through an episode: Next up becomes the one after it, and an ended show you've finished moves to Finished.
-  if (kind === 'tv' && body.through) {
-    const d = await details('tv', id);
-    const pos = nextPos(seasonsOf(d), Number(body.through.s), Number(body.through.e));
-    const p = progressOf(d, pos.s, pos.e);
-    const status = p.state === 'done' ? 'finished' : 'active';
-    db.prepare('UPDATE library SET next_s = ?, next_e = ?, status = ?, pstate = ? WHERE kind = ? AND tmdb_id = ?').run(pos.s, pos.e, status, p.state, kind, id);
-    return { entry: libEntry(kind, id), progress: p, autoFinished: status === 'finished', prev };
+  const startsShow = op === 'start' || op === 'resume' || op === 'rewatch' || body.through || body.s || body.status === 'active';
+  if (kind !== 'tv' || !startsShow) return { entry: libEntry(kind, id), prev };
+
+  const d = await details('tv', id);
+  const seasons = seasonsOf(d);
+  // Watched through an episode (or every aired one): Next up becomes the episode after it.
+  if (body.through) {
+    let th = body.through;
+    if (th === 'all') {
+      const last = d.last_episode_to_air;
+      if (!last) throw Object.assign(new Error('No episodes have aired yet.'), { status: 400 });
+      th = { s: last.season_number, e: last.episode_number };
+    }
+    const pos = nextPos(seasons, Number(th.s), Number(th.e));
+    set('active', pos.s, pos.e);
   }
-  return { entry: libEntry(kind, id), prev };
+  const r = libEntry(kind, id);
+  const pos = normalizePos(seasons, r.next_s, r.next_e);
+  const p = progressOf(d, pos.s, pos.e);
+  reconcile(r, p);
+  return { entry: libEntry(kind, id), progress: p, autoFinished: r.status === 'finished', prev };
 }
 
 async function myList() {
@@ -439,17 +471,23 @@ async function myList() {
       progress.set(r.tmdb_id, p);
     } catch (e) { /* no line this time */ }
   }));
-  // My List groups: Watching, Caught up, Not started, Finished. Active shows split by where you are in them.
+  // My List groups: Watching, Caught up, Not started, Paused, Finished. Started shows split by where you are in them.
   const groupOf = (r) => {
     if (r.status !== 'active') return r.status;
     const p = progress.get(r.tmdb_id);
-    return p && p.state === 'between' ? 'caught' : 'watching';
+    return p && p.state === 'caught' ? 'caught' : 'watching';
   };
-  const items = await availabilityFor(rows.map((r) => {
-    const p = r.kind === 'tv' ? progress.get(r.tmdb_id) : null;
-    return { kind: r.kind, id: r.tmdb_id, name: r.name, year: r.year, poster: r.poster, status: r.status, group: groupOf(r), tracked: !!r.tracked, progress: p ? p.line : null };
-  }));
-  const groups = [['watching', 'Watching'], ['caught', 'Caught up'], ['none', 'Not started'], ['finished', 'Finished']].map(([k, label]) => ({
+  const lineOf = (r) => {
+    if (r.kind !== 'tv') return null;
+    if (r.status === 'paused') return `Paused at S${r.next_s}E${r.next_e}`;
+    const p = progress.get(r.tmdb_id);
+    return r.status === 'active' && p ? p.line : null;
+  };
+  const items = await availabilityFor(rows.map((r) => ({
+    kind: r.kind, id: r.tmdb_id, name: r.name, year: r.year, poster: r.poster, status: r.status,
+    group: groupOf(r), pstate: progress.has(r.tmdb_id) ? progress.get(r.tmdb_id).state : r.pstate, tracked: !!r.tracked, progress: lineOf(r), place: r.kind === 'tv' && r.status !== 'none' ? `S${r.next_s}E${r.next_e}` : null
+  })));
+  const groups = [['watching', 'Watching'], ['caught', 'Caught up'], ['none', 'Not started'], ['paused', 'Paused'], ['finished', 'Finished']].map(([k, label]) => ({
     key: k, label, items: items.filter((i) => i.group === k)
   })).filter((g) => g.items.length);
   return { groups };
@@ -457,8 +495,9 @@ async function myList() {
 
 async function watching() {
   const mine = myFamilySet();
-  // Finished shows the app closed out itself (pstate 'done') are still checked monthly, in case they come back.
-  const rows = db.prepare("SELECT * FROM library WHERE status != 'finished' OR (kind = 'tv' AND pstate = 'done') ORDER BY added_at DESC").all();
+  // Started shows, unwatched movies, and Finished shows the app closed out itself (checked monthly, in case they come back).
+  // Not started shows and Paused titles stay off this tab.
+  const rows = db.prepare("SELECT * FROM library WHERE status = 'active' OR (kind = 'movie' AND status = 'none') OR (kind = 'tv' AND status = 'finished' AND pstate = 'done') ORDER BY added_at DESC").all();
   const shows = [];
   const coming = [];
   const movies = [];
@@ -479,8 +518,9 @@ async function watching() {
         const na = d.next_episode_to_air;
         if (na && na.air_date && na.air_date >= t && na.air_date <= in10) {
           coming.push({ ...base, line: 'S' + na.season_number + 'E' + na.episode_number + ' · ' + shortDate(na.air_date), date: na.air_date });
-        } else if (p.state === 'between' && p.date && p.date > in10) {
-          updates.push({ ...base, line: p.line.replace('Caught up · ', ''), date: p.date });
+        } else if (p.state === 'waiting' && p.premiere) {
+          // A new season you're waiting on: announced, or premiering more than 10 days out.
+          updates.push({ ...base, line: p.line, date: p.date || '9999' });
         }
       } else if (r.kind === 'movie' && a.tier === 'yours') {
         movies.push({ ...base, added: r.added_at });

@@ -78,7 +78,7 @@ db.exec(`
   );
 `);
 
-// Columns added after the first release. pstate = where an Active show stands (watching, airing, between, done).
+// Columns added after the first release. pstate = where a started show stands (watching, waiting, caught, done).
 for (const col of ['pstate TEXT']) {
   try { db.exec('ALTER TABLE library ADD COLUMN ' + col); } catch (e) { /* already there */ }
 }
