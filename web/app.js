@@ -450,6 +450,7 @@ async function screenTitle(rid, kind, id) {
   $view.innerHTML = `
     <div class="hero">${t.backdrop ? `<img src="${img(t.backdrop, 'w780')}" alt="">` : ''}<div class="shade"></div>
       <button class="back-dot" data-act="back" aria-label="Back">‹</button>
+      ${t.trailer ? `<a class="trailer-btn" href="${esc(t.trailer)}" target="_blank" rel="noopener" aria-label="Watch the ${esc(t.name)} trailer on YouTube"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>Trailer</a>` : ''}
       <div class="hero-text">
         <h1>${esc(t.name)}</h1>
         <p class="d">${esc(t.details)}${t.network ? ' · ' + esc(t.network) : ''}</p>

@@ -352,9 +352,18 @@ async function search(q, fam) {
   return { results: withListFlags(items), people, collections, studios, personFirst };
 }
 
+// The best YouTube trailer TMDb lists: official English trailers first, then any trailer, then a teaser.
+function trailerOf(videos) {
+  const yt = ((videos && videos.results) || []).filter((v) => v.site === 'YouTube' && v.key);
+  const score = (v) => (v.type === 'Trailer' ? 4 : v.type === 'Teaser' ? 1 : 0) + (v.official ? 2 : 0) + (v.iso_639_1 === 'en' ? 1 : 0);
+  const best = yt.filter((v) => v.type === 'Trailer' || v.type === 'Teaser')
+    .sort((a, b) => score(b) - score(a) || (b.published_at || '').localeCompare(a.published_at || ''))[0];
+  return best ? 'https://www.youtube.com/watch?v=' + encodeURIComponent(best.key) : null;
+}
+
 async function title(kind, id) {
   if (kind !== 'movie' && kind !== 'tv') throw Object.assign(new Error('Unknown kind'), { status: 400 });
-  const d = await details(kind, id);
+  const [d, videos] = await Promise.all([details(kind, id), tmdb.get('/' + kind + '/' + id + '/videos', 7 * DAY).catch(() => null)]);
   const mine = myFamilySet();
   const a = availability(d['watch/providers'], mine);
   const entry = libEntry(kind, id);
@@ -405,7 +414,8 @@ async function title(kind, id) {
     showWill: !theaters && !a.hasStream && (a.rent.length > 0 || a.buy.length > 0),
     willSearch: 'https://www.google.com/search?q=' + encodeURIComponent(name + ' ' + year + ' streaming release date'),
     entry,
-    tracked: tracking.isTracked(kind, id)
+    tracked: tracking.isTracked(kind, id),
+    trailer: trailerOf(videos)
   };
   if (isTv) {
     const seasons = seasonsOf(d);

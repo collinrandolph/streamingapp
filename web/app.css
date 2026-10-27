@@ -245,3 +245,5 @@ h2.sec.acc { margin: 14px 8px 6px; font-size: 16px; }
 .sec-row h2.sec { flex: 1; }
 .view-btn { width: 40px; height: 40px; color: var(--text-2); }
 .view-btn:hover { color: var(--text); }
+.hero .trailer-btn { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; height: 44px; padding: 0 16px; border-radius: 22px; background: rgba(15, 17, 21, .75); color: var(--text); display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 700; }
+.hero .trailer-btn:hover { background: rgba(15, 17, 21, .9); }
