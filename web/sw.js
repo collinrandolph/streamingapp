@@ -2,7 +2,7 @@
 // App files: network first (so updates arrive), falling back to the stored copy offline.
 // sql.js and posters: stored copy first, since they don't change.
 // TMDb and Wikidata data aren't handled here; the app's data code caches those itself.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = `shell-${VERSION}`;
 const STATIC = 'static-v1';
 const POSTERS = 'posters-v1';
@@ -59,6 +59,6 @@ self.addEventListener('fetch', (ev) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin === self.location.origin && !url.pathname.includes('/api/')) return ev.respondWith(networkFirst(req));
-  if (url.href.startsWith(SQLJS)) return ev.respondWith(cacheFirst(req, STATIC));
+  if (url.href.startsWith(SQLJS) || url.href.startsWith('https://cdn.jsdelivr.net/npm/jsqr@')) return ev.respondWith(cacheFirst(req, STATIC));
   if (url.hostname === 'image.tmdb.org') return ev.respondWith(cacheFirst(req, POSTERS, POSTER_LIMIT));
 });

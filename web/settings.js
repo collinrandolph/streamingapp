@@ -76,6 +76,74 @@ function screenPair() {
   }
 }
 
+// ---------- Scanning a PC's QR code inside the app ----------
+// On iPhone, an app added to the Home Screen keeps its own storage, apart from Safari, and the Camera
+// always opens links in Safari. So the installed app scans the code itself.
+
+const JSQR = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+let scanStream = null;
+
+function stopScan() {
+  if (scanStream) scanStream.getTracks().forEach((t) => t.stop());
+  scanStream = null;
+}
+
+async function openScanner() {
+  openSheet(`<h2>Scan your PC's QR code</h2>
+    <p>On the PC, open the helper's Connect page and point this phone at the code.</p>
+    <div class="scan-box"><video id="scan-video" playsinline muted></video><div class="scan-frame"></div></div>
+    <p class="hint" id="scan-note" style="margin:10px 0 0">Starting the camera…</p>
+    <details style="margin-top:12px"><summary class="hint" style="margin:0;cursor:pointer">Can't scan? Paste the link</summary>
+      <input id="scan-paste" class="search" type="url" placeholder="https://…#/pair?d=…" style="margin-top:8px">
+      <button class="btn-secondary" style="margin-top:8px" data-act="set-scan-paste">Use this link</button>
+    </details>`);
+  const note = document.getElementById('scan-note');
+  try {
+    const [stream] = await Promise.all([
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }),
+      window.jsQR ? null : new Promise((ok, fail) => { const s = document.createElement('script'); s.src = JSQR; s.onload = ok; s.onerror = () => fail(new Error("Couldn't load the QR reader. Check your connection.")); document.head.appendChild(s); })
+    ]);
+    scanStream = stream;
+    const video = document.getElementById('scan-video');
+    if (!video) return stopScan();
+    video.srcObject = stream;
+    await video.play();
+    note.textContent = 'Looking for a QR code…';
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const tick = () => {
+      if (!scanStream || !document.getElementById('scan-video')) return stopScan();
+      if (video.videoWidth) {
+        // Scan a downsized frame: quicker, and plenty for a code on a screen.
+        const scale = Math.min(1, 640 / video.videoWidth);
+        canvas.width = video.videoWidth * scale;
+        canvas.height = video.videoHeight * scale;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const code = window.jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' });
+        if (code && usePairLink(code.data)) return;
+        if (code) note.textContent = "That QR code isn't a PC helper's. Scan the one on its Connect page.";
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  } catch (e) {
+    stopScan();
+    note.textContent = e.name === 'NotAllowedError'
+      ? 'Camera access was blocked. Allow it for this app in Settings, or paste the link below.'
+      : e.message || "Couldn't start the camera. Paste the link below instead.";
+  }
+}
+
+// Takes a PC helper's pairing link (scanned or pasted) and opens it inside this app.
+function usePairLink(text) {
+  const m = String(text || '').match(/#\/pair\?d=([\w-]+)/);
+  if (!m) return false;
+  stopScan();
+  closeSheet();
+  location.hash = '#/pair?d=' + m[1];
+  return true;
+}
+
 // Asks a PC for its TMDb (and OMDb) keys over the encrypted relay and saves them on this device.
 async function fetchKeysFromPc(pc) {
   const r = await relayRequest(pc, 'keys', {}, 10000);
@@ -229,8 +297,9 @@ function pcsHtml() {
       <p style="margin:0 0 8px;font-weight:600">Add a PC</p>
       <ol class="pc-steps">
         <li>On the PC, <a href="${HELPER_DOWNLOAD}">download the PC helper</a> (StreamingTracker-PC.exe) and run it. Windows may warn that it's from an unknown publisher: choose More info › Run anyway.</li>
-        <li>It opens a Connect page with a QR code. Scan it with your phone's camera.</li>
+        <li>It opens a Connect page with a QR code. Scan it here:</li>
       </ol>
+      <button class="btn-primary" data-act="set-scan" style="margin-top:6px">Scan the QR code</button>
       <details style="margin-top:8px"><summary class="hint" style="margin:0;cursor:pointer">Or enter an address</summary>
         <div style="margin-top:10px">${'<label class="lbl" for="set-pc">PC address</label><input id="set-pc" class="search" type="text" autocomplete="off" placeholder="192.168.0.104:8787" style="margin-bottom:10px">'}
         <button class="btn-secondary" data-act="set-save-pc">Use this address</button></div>
@@ -263,6 +332,11 @@ document.addEventListener('click', async (ev) => {
       rememberPc({ id: 'addr-' + m[1], name: 'PC at ' + m[1], port: Number(m[2]) || 8787, addrs: [m[1]] });
       toast('PC address saved');
       return route();
+    }
+    if (act === 'set-scan') return openScanner();
+    if (act === 'set-scan-paste') {
+      if (!usePairLink(document.getElementById('scan-paste').value)) toast("That isn't a PC helper's link.");
+      return;
     }
     if (act === 'set-pc-keys') {
       el.disabled = true;
