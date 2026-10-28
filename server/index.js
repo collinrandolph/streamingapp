@@ -93,13 +93,20 @@ const server = http.createServer(async (req, res) => {
     if (!buf) { res.writeHead(404); return res.end(); }
     return sendFile(res, core[1], buf);
   }
+  const prof = url.pathname.match(/^\/api\/profiles\/(list|create|link|sync|restore|unlink)$/);
+  if (prof) {
+    try {
+      const P = require('./profiles');
+      return sendJson(res, 200, prof[1] === 'list' ? P.list() : P[prof[1]](await readJson(req)));
+    } catch (e) { return sendJson(res, e.status || 500, { error: e.message }); }
+  }
   if (url.pathname.startsWith('/api/')) {
     try {
       const body = req.method === 'POST' ? await readJson(req) : null;
       const out = await api.handle(req.method, url.pathname, url.searchParams, body);
       sendJson(res, 200, out);
     } catch (e) {
-      sendJson(res, e.status || 500, { error: e.message });
+      sendJson(res, e.status || 500, { error: e.message, playing: e.playing, busy: e.busy, app: e.app });
     }
     return;
   }

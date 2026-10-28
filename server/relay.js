@@ -4,6 +4,7 @@
 // your router. The channel name and an encryption key are made here once and reach the phone in the QR
 // code; every message is encrypted (AES-GCM), so ntfy.sh only ever sees scrambled text.
 const crypto = require('crypto');
+const zlib = require('zlib');
 const db = require('./db');
 const roku = require('./roku');
 
@@ -53,14 +54,46 @@ async function unseal(text) {
   }
 }
 
+// ntfy allows about 4 KB per message, so anything carrying a list (data) goes gzipped and in numbered parts.
+const PART = 2400; // characters of compressed, base64url data per part; leaves room for encryption
 async function publish(obj) {
   const c = creds();
-  const res = await fetch(`${c.server}/${c.topic}`, {
-    method: 'POST',
-    headers: { 'content-type': 'text/plain', Firebase: 'no' },
-    body: await seal({ ...obj, from: 'pc', at: Date.now() })
-  });
-  if (!res.ok) throw new Error('relay ' + res.status);
+  // ntfy briefly refuses bursts of messages, so try a few times.
+  const post = async (o) => {
+    const body = await seal({ ...o, from: 'pc', at: Date.now() });
+    for (let i = 0; ; i++) {
+      try {
+        const res = await fetch(`${c.server}/${c.topic}`, { method: 'POST', headers: { 'content-type': 'text/plain', Firebase: 'no' }, body });
+        if (res.ok) return;
+        if (i >= 2) throw new Error('relay ' + res.status);
+      } catch (e) {
+        if (i >= 2) throw e;
+      }
+      await new Promise((ok) => setTimeout(ok, 2000 * (i + 1)));
+    }
+  };
+  if (obj.data == null) { const { data, ...rest } = obj; return post(rest); }
+  const { data, ...rest } = obj;
+  const z = zlib.gzipSync(Buffer.from(JSON.stringify(data))).toString('base64url');
+  const parts = Math.max(1, Math.ceil(z.length / PART));
+  for (let i = 0; i < parts; i++) await post({ ...rest, part: i, parts, z: z.slice(i * PART, (i + 1) * PART) });
+}
+
+// Puts multi-part messages back together. Returns the whole message once every part is in, else null.
+const pending = new Map();
+function assemble(msg) {
+  if (msg.parts === undefined) return msg;
+  const key = msg.id;
+  let p = pending.get(key);
+  if (!p) { p = { got: new Map(), first: msg, at: Date.now() }; pending.set(key, p); }
+  p.got.set(msg.part, msg.z);
+  if (msg.part === 0) p.first = msg;
+  for (const [k, v] of pending) if (Date.now() - v.at > MAX_AGE) pending.delete(k);
+  if (p.got.size < msg.parts) return null;
+  pending.delete(key);
+  const z = [...Array(msg.parts).keys()].map((i) => p.got.get(i)).join('');
+  const { part, parts, z: _z, ...rest } = p.first;
+  return { ...rest, data: JSON.parse(zlib.gunzipSync(Buffer.from(z, 'base64url')).toString()) };
 }
 
 let info = () => ({});
@@ -84,11 +117,16 @@ async function heartbeat() {
 }
 
 const seen = new Set();
-async function handle(msg) {
-  if (!msg || msg.from !== 'app' || !msg.id || seen.has(msg.id)) return;
-  seen.add(msg.id);
-  if (seen.size > 200) seen.delete(seen.values().next().value);
-  if (Date.now() - (msg.at || 0) > MAX_AGE) return;
+async function handle(raw) {
+  if (!raw || raw.from !== 'app' || !raw.id) return;
+  const partKey = raw.id + ':' + (raw.part === undefined ? '' : raw.part);
+  if (seen.has(partKey)) return;
+  seen.add(partKey);
+  if (seen.size > 400) seen.delete(seen.values().next().value);
+  if (Date.now() - (raw.at || 0) > MAX_AGE) return;
+  let msg;
+  try { msg = assemble(raw); } catch (e) { return; }
+  if (!msg) return; // waiting for more parts
   state.lastRequest = Date.now();
   const reply = (fields) => publish({ t: msg.t + '-reply', re: msg.id, ...fields }).catch(() => {});
   const i = info();
@@ -104,11 +142,24 @@ async function handle(msg) {
     const s = roku.status();
     if (!s.device) return reply({ ok: false, error: `No TV is set up on ${i.name} yet. Open the remote on the PC to connect one.` });
     if (!s.calibration) return reply({ ok: false, error: `The TV's search path isn't calibrated on ${i.name} yet.` });
+    // One at a time, and ask before interrupting something that's playing.
+    const tv = await roku.tvState();
+    if (tv.busy) return reply({ ok: false, busy: true, error: 'The TV is busy with another request. Try again in a few seconds.' });
+    if (tv.playing && !msg.force) return reply({ ok: false, playing: true, app: tv.app, tv: s.device.name });
     // Answer straight away, then press: the presses take about 8 seconds.
     await reply({ ok: true, tv: s.device.name });
-    try { await roku.openBySearch({ title: String(msg.title || '').slice(0, 60) }); } catch (e) { publish({ t: 'tv-failed', re: msg.id, error: e.message }).catch(() => {}); }
+    try { await roku.openBySearch({ title: String(msg.title || '').slice(0, 60), force: true }); } catch (e) { publish({ t: 'tv-failed', re: msg.id, error: e.message }).catch(() => {}); }
     return;
   }
+  // Profiles (see profiles.js).
+  const P = require('./profiles');
+  const run = (fn) => { try { reply({ ok: true, ...fn() }); } catch (e) { reply({ ok: false, error: e.message, status: e.status }); } };
+  if (msg.t === 'profiles') return run(() => P.list());
+  if (msg.t === 'profile-create') return run(() => P.create(msg));
+  if (msg.t === 'profile-link') return run(() => P.link(msg));
+  if (msg.t === 'profile-sync') return run(() => P.sync(msg));
+  if (msg.t === 'profile-restore') return run(() => P.restore(msg));
+  if (msg.t === 'profile-unlink') return run(() => P.unlink(msg));
   reply({ ok: false, error: 'Unknown request' });
 }
 

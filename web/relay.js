@@ -7,7 +7,21 @@ const RELAY_ONLINE = 15 * 60 * 1000; // a PC that said "I'm here" this recently 
 const relayStatusCache = new Map();
 const relayCryptoKeys = new Map();
 
-const b64uEncode = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const RELAY_PART = 2400; // compressed characters per message: ntfy allows about 4 KB, encryption adds a third
+
+function b64uEncode(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function relayZip(obj) {
+  const stream = new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream('gzip'));
+  return b64uEncode(new Uint8Array(await new Response(stream).arrayBuffer()));
+}
+async function relayUnzip(z) {
+  const stream = new Blob([b64uDecode(z)]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return JSON.parse(await new Response(stream).text());
+}
 const b64uDecode = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 
 async function relayKey(r) {
@@ -73,6 +87,20 @@ async function relayStatus(pc) {
   return status;
 }
 
+// ntfy briefly refuses bursts of messages (and refusals arrive as network errors), so try a few times.
+async function relayPost(r, headers, body) {
+  for (let i = 0; ; i++) {
+    try {
+      const res = await fetch(`${r.s}/${r.t}`, { method: 'POST', headers, body });
+      if (res.ok) return res;
+      if (i >= 2) throw new Error('relay ' + res.status);
+    } catch (e) {
+      if (i >= 2) throw e;
+    }
+    await new Promise((ok) => setTimeout(ok, 2000 * (i + 1)));
+  }
+}
+
 // Sends one request to the PC and waits for its answer. Listens first, so the answer can't be missed.
 function relayRequest(pc, t, data = {}, timeout = 8000) {
   const r = pc.relay;
@@ -82,26 +110,46 @@ function relayRequest(pc, t, data = {}, timeout = 8000) {
     const fail = (msg, code) => { ctrl.abort(); reject(Object.assign(new Error(msg), { code })); };
     const timer = setTimeout(() => fail(`${pc.name} didn't answer over the internet.`, 'timeout'), timeout);
     let sent = false;
+    const replyParts = new Map();
     fetch(`${r.s}/${r.t}/json`, { signal: ctrl.signal }).then((res) => {
-      if (!res.ok) throw new Error('relay ' + res.status);
+      if (!res.ok) throw Object.assign(new Error('relay ' + res.status), { busy: res.status === 429 });
       return relayRead(r, res, async (m) => {
         if (m && m.open && !sent) {
           sent = true;
-          const body = await relaySeal(r, { t, id, from: 'app', at: Date.now(), ...data });
           // Cache: no, so a PC that's off never picks this up later.
-          fetch(`${r.s}/${r.t}`, { method: 'POST', headers: { Cache: 'no', Firebase: 'no' }, body }).catch(() => fail("Couldn't reach the relay.", 'network'));
+          // ...o first, so a field called id in the payload can't replace the request's id.
+          const post = async (o) => relayPost(r, { Cache: 'no', Firebase: 'no' }, await relaySeal(r, { ...o, t, id, from: 'app', at: Date.now() }));
+          try {
+            if (data.data === undefined) await post(data);
+            else {
+              // A list doesn't fit in one message: gzip it and send numbered parts.
+              const { data: payload, ...rest } = data;
+              const z = await relayZip(payload);
+              const parts = Math.max(1, Math.ceil(z.length / RELAY_PART));
+              for (let i = 0; i < parts; i++) await post({ ...rest, part: i, parts, z: z.slice(i * RELAY_PART, (i + 1) * RELAY_PART) });
+            }
+          } catch (e) { fail("Couldn't reach the relay.", 'network'); }
         }
         if (m && m.from === 'pc' && m.re === id) {
+          let whole = m;
+          if (m.parts !== undefined) {
+            replyParts.set(m.part, m);
+            if (replyParts.size < m.parts) return;
+            const first = replyParts.get(0);
+            const z = [...Array(m.parts).keys()].map((i) => replyParts.get(i).z).join('');
+            const { part, parts, z: _z, ...rest } = first;
+            whole = { ...rest, data: await relayUnzip(z) };
+          }
           clearTimeout(timer);
           ctrl.abort();
           relayStatusCache.delete(pc.id);
-          resolve(m);
+          resolve(whole);
         }
       });
     }).catch((e) => {
       if (e.name === 'AbortError') return;
       clearTimeout(timer);
-      fail("Couldn't reach the relay. Check your connection.", 'network');
+      fail(e.busy ? 'The relay is busy for a minute. Try again shortly.' : "Couldn't reach the relay. Check your connection.", 'network');
     });
   });
 }

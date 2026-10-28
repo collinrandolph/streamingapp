@@ -260,19 +260,46 @@ function saveCalibration(b) {
 }
 
 // Test or use the search path. b.rec: an unsaved recording to try (the wizard's test run); otherwise the saved one.
+// One Watch on TV at a time: two people's presses must never mix on the TV.
+let busy = false;
+
+// Is the TV mid-request, or playing something? Asked before sending, so the app can offer to interrupt.
+// The home screen, search and Roku's title pages all count as not playing.
+async function tvState() {
+  if (busy) return { busy: true };
+  const d = device();
+  if (!d) return {};
+  try {
+    const [a, m] = await Promise.all([request(d.ip, 'GET', '/query/active-app', 2500), request(d.ip, 'GET', '/query/media-player', 2500)]);
+    const app = (a.body.match(/<app[^>]*>([^<]*)<\/app>/) || [])[1] || '';
+    const onHome = /type="home"/.test(a.body) || app === 'Roku' || /<screensaver/.test(a.body);
+    const state = (m.body.match(/<player[^>]*state="([^"]+)"/) || [])[1] || '';
+    return { playing: !onHome && state === 'play', app };
+  } catch (e) {
+    return {}; // can't tell: don't block
+  }
+}
+
+// force: send even if something's playing (the person said Interrupt).
 async function openBySearch(b) {
   const title = String(b.title || '').trim().slice(0, 60);
   if (!title) throw Object.assign(new Error('Which title?'), { status: 400 });
   const cal = b.rec ? buildCalibration(b.rec) : calibration();
   if (!cal) throw Object.assign(new Error('Calibrate the search path first.'), { status: 409 });
+  if (busy) throw Object.assign(new Error('The TV is busy with another request. Try again in a few seconds.'), { status: 409, busy: true });
+  if (!b.force && !b.rec && device()) {
+    const st = await tvState();
+    if (st.playing) throw Object.assign(new Error(`${st.app || 'Something'} is playing on ${device().name}.`), { status: 409, playing: true, app: st.app });
+  }
   if (b.rec) setSetting('rokuLastTest', { rec: b.rec, title, at: Date.now() });
   const seq = plan(cal, title);
   const dry = !device();
-  await runPlan(seq, dry);
+  busy = true;
+  try { await runPlan(seq, dry); } finally { busy = false; }
   return { dry, presses: seq.length, sequence: seq.map(([k]) => k), calibration: cal };
 }
 
 function clearLog() { log.length = 0; return status(); }
 function clearCalibration() { setSetting('rokuCalibration', null); return status(); }
 
-module.exports = { status, setup, find, key, text, saveCalibration, openBySearch, clearLog, clearCalibration, calibration, inferGrid, gridPresses };
+module.exports = { status, setup, find, key, text, saveCalibration, openBySearch, tvState, clearLog, clearCalibration, calibration, inferGrid, gridPresses };

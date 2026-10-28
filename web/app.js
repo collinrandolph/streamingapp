@@ -17,7 +17,10 @@ async function api(path, body) {
   if (path.startsWith('/roku')) return pcApi(path, body);
   const url = new URL('/api' + path, location.origin);
   try {
-    return await state.core.handle(body ? 'POST' : 'GET', url.pathname, url.searchParams, body || null);
+    const out = await state.core.handle(body ? 'POST' : 'GET', url.pathname, url.searchParams, body || null);
+    // Any change to the list gets synced to this phone's profile on the PC (profile.js).
+    if (body && typeof markDirty === 'function') markDirty();
+    return out;
   } catch (e) {
     throw Object.assign(new Error(e.message || 'Something went wrong'), { status: e.status || 500 });
   }
@@ -27,7 +30,7 @@ async function pcApi(path, body) {
   if (!state.pc) throw Object.assign(new Error("The remote works from your PC's address. Set it in Settings, then use Watch on TV."), { status: 409 });
   const res = await fetch('/api' + path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed (' + res.status + ')'), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed (' + res.status + ')'), { status: res.status, playing: data.playing, busy: data.busy, app: data.app });
   return data;
 }
 
@@ -381,7 +384,7 @@ async function screenServices(rid) {
     <p class="hint">Open a service to browse it and add titles.</p>
     <div class="pad"><div class="panel">${st.services.map((s) => `<a class="item" href="#/service/${encodeURIComponent(s.family)}"><span style="display:flex;align-items:center;gap:12px">${s.logo ? `<img class="svc-logo" src="${img(s.logo, 'w92')}" alt="">` : ''}<span class="t">${esc(s.name)}</span></span><span style="color:var(--accent);font-size:18px">›</span></a>`).join('') || '<p class="empty" style="padding:14px">No services yet.</p>'}</div></div>
     <div class="pad" style="margin-top:12px"><a class="btn-outline" style="display:flex;align-items:center;justify-content:center;border-style:dashed" href="#/setup">Add or remove services</a></div>
-    <p class="attrib">This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
+    <p class="attrib"><img class="tmdb-logo" src="tmdb-logo.svg" alt="TMDB" width="120" height="16"><br>This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
 }
 
 // Following: the people, franchises and studios whose new titles come to Updates.
@@ -616,6 +619,7 @@ async function route() {
     if ((parts[0] || '').startsWith('bridge-done')) return await screenBridgeDone();
     if ((parts[0] || '').startsWith('bridge')) return await screenBridge();
     if (parts[0] === 'settings') return await screenSettings(rid);
+    if (parts[0] === 'profiles') return await screenProfiles(rid);
     if (!state.status) state.status = await api('/status');
     if (!state.status.hasKey) {
       renderNav(null, false);
@@ -770,7 +774,11 @@ document.addEventListener('click', async (ev) => {
       return;
     }
 
-    // Watch on TV: replay the calibrated search path with this title; the TV stops on Roku's page for it.
+    // Watch on TV: replay the calibrated search path with this title; the TV stops on Roku's search results.
+    // If something's playing, ask first; Interrupt sends it again with force.
+    const askInterrupt = (title, app, tv) => openSheet(`<h2>${esc(app || 'Something')} is playing</h2><p>${esc(app || 'Something')} is playing on ${esc(tv || 'the TV')}. Sending ${esc(title)} will interrupt it.</p>
+      <div class="stack"><button class="btn-primary" data-act="watch-tv" data-title="${esc(title)}" data-force="1">Interrupt and send</button></div>`);
+    const force = el.dataset.force === '1';
     if (act === 'watch-tv' && !state.pc) {
       // Hosted app: through the PC's relay from anywhere; if that fails, through a PC page on the same Wi-Fi.
       if (!pcUrl()) {
@@ -780,13 +788,15 @@ document.addEventListener('click', async (ev) => {
       const title = el.dataset.title;
       if (!pc || !pc.relay) {
         el.innerHTML = ICONS.tv + 'Opening on TV…';
-        return goToBridge('tv', { title });
+        return goToBridge('tv', { title, ...(force ? { force: '1' } : {}) });
       }
       const label = el.innerHTML;
       el.disabled = true;
       el.innerHTML = ICONS.tv + 'Sending to your TV…';
       try {
-        const r = await relayRequest(pc, 'tv', { title });
+        closeSheet();
+        const r = await relayRequest(pc, 'tv', { title, force });
+        if (r.playing) return askInterrupt(title, r.app, r.tv);
         if (!r.ok) return toast(r.error || 'Your PC reported a problem.');
         return toast(`${title} is going to ${r.tv || 'your TV'}. Pick it from the search results with your remote.`);
       } catch (e) {
@@ -810,8 +820,12 @@ document.addEventListener('click', async (ev) => {
       const label = el.innerHTML;
       el.innerHTML = ICONS.tv + 'Opening on TV…';
       try {
-        await api('/roku/open-search', { title: el.dataset.title });
+        closeSheet();
+        await api('/roku/open-search', { title: el.dataset.title, force });
         toast(`${el.dataset.title} is in the search results on ${s.device.name}. Pick it with your remote.`);
+      } catch (e) {
+        if (e.playing) return askInterrupt(el.dataset.title, e.app, s.device.name);
+        throw e;
       } finally {
         el.disabled = false;
         el.innerHTML = label;
@@ -928,6 +942,7 @@ async function startApp() {
     state.pc = !!(ping && ping.pc);
     state.pcInfo = state.pc ? ping : null;
     if (state.pc && core) await adoptPc();
+    if (core) resumeSync();
     // Offline support needs a secure address (the hosted app, or localhost); the PC's http address can't have it.
     if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
   } catch (e) {

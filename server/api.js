@@ -744,6 +744,7 @@ async function handle(method, path, query, body) {
     if (method === 'POST' && b === 'calibration') return roku.saveCalibration(body || {});
     if (method === 'POST' && b === 'calibration-clear') return roku.clearCalibration();
     if (method === 'POST' && b === 'open-search') return roku.openBySearch(body || {});
+    if (method === 'GET' && b === 'tv-state') return roku.tvState();
     if (method === 'POST' && b === 'log-clear') return roku.clearLog();
   }
   throw Object.assign(new Error('Not found'), { status: 404 });

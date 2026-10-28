@@ -62,8 +62,10 @@ function screenPair() {
       ? 'Watch on TV now goes through this PC from anywhere, over the internet. The PC needs to be on with the helper running; your phone can be on any network.'
       : `Watch on TV now goes through this PC at ${esc(pc.addr)}. It needs to be on, with the helper running, and your phone on the same Wi-Fi.`}</p>
     <div class="stack" style="margin:22px auto 0;max-width:320px">
-      <button class="${empty ? 'btn-primary' : 'btn-secondary'}" data-act="set-import-pc">Copy my list from this PC</button>
-      <a class="${empty ? 'btn-secondary' : 'btn-primary'}" style="display:flex;align-items:center;justify-content:center" href="#/watching">${empty ? 'Skip' : 'Done'}</a>
+      ${pc.relay && !(linkedProfile() && linkedProfile().pcId === pc.id)
+        ? `<a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/profiles">Choose your profile</a>
+          <a class="btn-secondary" style="display:flex;align-items:center;justify-content:center" href="#/watching">Not now</a>`
+        : '<a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/watching">Done</a>'}
     </div>
     <p class="hint" id="pair-keys" style="margin-top:16px"></p>
     ${pc.addrs.length > 1 ? `<p class="hint" style="margin-top:8px">This PC has ${pc.addrs.length} addresses. If Watch on TV can't reach it, pick another in Settings.</p>` : ''}
@@ -213,9 +215,21 @@ async function screenBridge() {
       const s = await pcApi('/roku');
       if (!s.device) throw new Error('No TV is set up on your PC yet. Open the remote on the PC to connect one.');
       if (!s.calibration) throw new Error("The search path isn't calibrated yet. Open the remote on the PC and calibrate it.");
+      // Something playing? Ask here, on the PC page, before interrupting it.
+      const force = q.get('force') === '1';
+      const tv = force ? {} : await pcApi('/roku/tv-state').catch(() => ({}));
+      if (tv.busy) throw new Error('The TV is busy with another request. Try again in a few seconds.');
+      if (tv.playing) {
+        const again = new URLSearchParams(q);
+        again.set('force', '1');
+        $view.innerHTML = `<div class="bridge"><h1>${esc(tv.app || 'Something')} is playing</h1><p>Sending ${esc(title)} to ${esc(s.device.name)} will interrupt it.</p>
+          <div class="stack" style="margin:20px auto 0;max-width:320px"><a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/bridge?${again}">Interrupt and send</a>
+          ${safeBack ? `<a class="btn-secondary" style="display:flex;align-items:center;justify-content:center" href="${esc(safeBack + to)}">Back to the app</a>` : ''}</div></div>`;
+        return;
+      }
       // Send the presses without waiting for them (about 8 seconds), so you're back in the app right away.
       // keepalive lets the request finish after this page has gone.
-      fetch('/api/roku/open-search', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title }) });
+      fetch('/api/roku/open-search', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, force: true }) });
       await new Promise((r) => setTimeout(r, 400));
       if (!safeBack) return show('Sent to your TV', 'Pick the title from the search results with your remote.');
       reply({ ok: '1', title });
@@ -244,6 +258,9 @@ async function screenSettings(rid) {
     <div class="pad"><h1 style="margin:4px 0 4px;font-size:26px">Settings</h1>
       <p class="hint" style="margin:0 0 6px">Everything here, and your list, is stored on this device only.</p></div>
 
+    <h2 class="sec" style="font-size:16px">Profile</h2>
+    ${profileHtml()}
+
     <h2 class="sec" style="font-size:16px">Keys</h2>
     <div class="pad"><div class="panel" style="padding:14px">
       ${field('set-tmdb', 'TMDb API Read Access Token', s.tmdbToken, { type: 'password', placeholder: 'eyJhbGci…' })}
@@ -263,7 +280,7 @@ async function screenSettings(rid) {
       </div>
       <p class="hint" style="margin:10px 0 0">A backup holds your services, My List, places in shows, follows and saved searches. Restoring replaces what's on this device.</p>
     </div></div>
-    <p class="attrib">This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
+    <p class="attrib"><img class="tmdb-logo" src="tmdb-logo.svg" alt="TMDB" width="120" height="16"><br>This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
   // Fill in each PC's online status from its relay channel.
   for (const p of pcList()) {
     if (!p.relay) continue;
@@ -292,7 +309,7 @@ function pcsHtml() {
   return `<div class="pad"><div class="panel">
       ${rows || (legacy ? `<div class="item"><span class="l"><span class="t">PC at ${esc(legacy.replace(/^https?:\/\//, ''))}</span><span class="s">Added by address. Scan its QR code to name it and keep it up to date.</span></span></div>` : '<div class="item"><span class="l"><span class="t">No PC yet</span><span class="s">Watch on TV and the remote work through a PC running the helper.</span></span></div>')}
     </div>
-    ${active || legacy ? `<div class="stack" style="margin-top:10px">${state.pc ? '' : '<button class="btn-secondary" data-act="set-import-pc">Copy my list from the PC in use</button>'}${active && active.relay && !state.pc ? '<button class="btn-secondary" data-act="set-pc-keys">Get the TMDb key from the PC in use</button>' : ''}</div>` : ''}
+    ${active || legacy ? `<div class="stack" style="margin-top:10px">${active && active.relay && !state.pc ? '<button class="btn-secondary" data-act="set-pc-keys">Get the TMDb key from the PC in use</button>' : ''}</div>` : ''}
     <div class="panel" style="padding:14px;margin-top:10px">
       <p style="margin:0 0 8px;font-weight:600">Add a PC</p>
       <ol class="pc-steps">
