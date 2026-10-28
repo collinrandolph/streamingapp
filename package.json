@@ -10,5 +10,11 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "build:exe": "node tools/build-exe.js"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/filesystem": "^8.1.5"
   }
 }

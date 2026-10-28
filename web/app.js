@@ -12,17 +12,18 @@ const img = (p, size) => (p ? IMG + size + p : '');
 const initials = (name) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('');
 
 // Data requests are answered by the copy of the data code running in this page (web/core.js), so the app
-// works with the PC off. Roku requests go to the PC, which this page can only call when it came from the PC.
+// works with the PC off. Roku requests go to the PC, which this page can only call when it came from the PC,
+// except in the Android app, which reaches the TV itself (core.js).
 async function api(path, body) {
-  if (path.startsWith('/roku')) return pcApi(path, body);
+  if (path.startsWith('/roku') && !NATIVE) return pcApi(path, body);
   const url = new URL('/api' + path, location.origin);
   try {
     const out = await state.core.handle(body ? 'POST' : 'GET', url.pathname, url.searchParams, body || null);
-    // Any change to the list gets synced to this phone's profile on the PC (profile.js).
-    if (body && typeof markDirty === 'function') markDirty();
+    // Any change to the list gets synced to this phone's profile on the PC (profile.js); TV presses aren't list changes.
+    if (body && !path.startsWith('/roku') && typeof markDirty === 'function') markDirty();
     return out;
   } catch (e) {
-    throw Object.assign(new Error(e.message || 'Something went wrong'), { status: e.status || 500 });
+    throw Object.assign(new Error(e.message || 'Something went wrong'), { status: e.status || 500, playing: e.playing, busy: e.busy, app: e.app });
   }
 }
 
@@ -108,7 +109,7 @@ function renderNav(current, show) {
 function header(title) {
   // The remote runs on the PC: a link here when this page came from the PC, otherwise a new tab on the PC's address.
   const pc = typeof pcUrl === 'function' ? pcUrl() : '';
-  const remote = state.pc ? `<a class="icon-btn" href="#/remote" aria-label="Remote">${ICONS.remote}</a>`
+  const remote = state.pc || NATIVE ? `<a class="icon-btn" href="#/remote" aria-label="Remote">${ICONS.remote}</a>`
     : pc ? `<a class="icon-btn" href="${esc(pc)}/#/remote" target="_blank" rel="noopener" aria-label="Remote, on your PC">${ICONS.remote}</a>` : '';
   return `<div class="top"><h1>${esc(title)}</h1><span class="top-btns">${remote}<a class="icon-btn" href="#/settings" aria-label="Settings">${ICONS.gear}</a><a class="icon-btn" href="#/search" aria-label="Search all titles">${ICONS.search}</a></span></div>`;
 }
@@ -512,7 +513,7 @@ async function screenTitle(rid, kind, id) {
     </div>
     ${ratingsTop ? '' : `<h2 class="sec" style="font-size:16px">Ratings</h2><div class="pad">${ratingsHtml(t)}</div>`}`;
   // Under Watch on TV: whether the PC can be reached from here, from its relay channel's last "I'm here".
-  if (!state.pc && typeof activePc === 'function' && activePc()) {
+  if (!state.pc && !NATIVE && typeof activePc === 'function' && activePc()) {
     const pc = activePc();
     const box = document.getElementById('tv-status');
     if (!pc.relay) box.textContent = `Through ${pc.name} on the same Wi-Fi`;
@@ -620,10 +621,23 @@ async function route() {
     if ((parts[0] || '').startsWith('bridge')) return await screenBridge();
     if (parts[0] === 'settings') return await screenSettings(rid);
     if (parts[0] === 'profiles') return await screenProfiles(rid);
+    // The Android app's remote needs no key.
+    if (NATIVE && parts[0] === 'remote') return parts[1] === 'calibrate' ? await screenCalibrate(rid) : await screenRemote(rid);
     if (!state.status) state.status = await api('/status');
     if (!state.status.hasKey) {
       renderNav(null, false);
       const pc = typeof activePc === 'function' ? activePc() : null;
+      if (NATIVE) {
+        // The app needs no PC: paste the key here, or take it from a PC helper if there is one.
+        $view.innerHTML = `<div style="padding:28px 16px 0"><h1 style="margin:0 0 8px;font-size:26px">Streaming Tracker</h1>
+          <p style="margin:0;color:var(--muted)">Paste your TMDb API Read Access Token to start. Get one free at themoviedb.org › Settings › API.</p></div>
+          <div class="pad stack" style="margin-top:14px">
+            <input id="nk-tmdb" class="search" type="password" autocomplete="off" spellcheck="false" placeholder="eyJhbGci…">
+            <button class="btn-primary" data-act="nk-save">Save and start</button>
+            <button class="btn-secondary" data-act="set-scan">Or scan a PC helper's QR code</button>
+            <a class="btn-secondary" style="display:flex;align-items:center;justify-content:center" href="#/remote">Open the TV remote</a></div>`;
+        return;
+      }
       $view.innerHTML = '<div style="padding:28px 16px 0"><h1 style="margin:0;font-size:26px">Streaming Tracker</h1></div>' + errorHtml({ status: 503 })
         + `<div class="pad stack" style="margin-top:14px">${pc && pc.relay ? `<button class="btn-primary" data-act="set-pc-keys">Get the TMDb key from ${esc(pc.name)}</button>` : ''}
           <button class="${pc && pc.relay ? 'btn-secondary' : 'btn-primary'}" data-act="set-scan">Scan your PC's QR code</button></div>`;
@@ -650,7 +664,7 @@ async function route() {
     if (p0 === 'good' && p1 === 'results') return await screenGoodResults(rid);
     if (p0 === 'good') { goodStart(); return; }
     if (p0 === 'pair-done') { location.replace('#/watching'); return; }
-    if (p0 === 'remote' && !state.pc) return screenRemoteElsewhere();
+    if (p0 === 'remote' && !state.pc && !NATIVE) return screenRemoteElsewhere();
     if (p0 === 'remote' && p1 === 'calibrate') return await screenCalibrate(rid);
     if (p0 === 'remote') return await screenRemote(rid);
     if (p0 === 'search') return await screenSearch(rid);
@@ -779,7 +793,7 @@ document.addEventListener('click', async (ev) => {
     const askInterrupt = (title, app, tv) => openSheet(`<h2>${esc(app || 'Something')} is playing</h2><p>${esc(app || 'Something')} is playing on ${esc(tv || 'the TV')}. Sending ${esc(title)} will interrupt it.</p>
       <div class="stack"><button class="btn-primary" data-act="watch-tv" data-title="${esc(title)}" data-force="1">Interrupt and send</button></div>`);
     const force = el.dataset.force === '1';
-    if (act === 'watch-tv' && !state.pc) {
+    if (act === 'watch-tv' && !state.pc && !NATIVE) {
       // Hosted app: through the PC's relay from anywhere; if that fails, through a PC page on the same Wi-Fi.
       if (!pcUrl()) {
         return openSheet(`<h2>Watch on TV needs your PC</h2><p>Run the PC helper on your computer and scan its QR code. Settings › Your PCs has the download.</p><div class="stack"><a class="btn-primary" style="display:flex;align-items:center;justify-content:center" href="#/settings">Open Settings</a></div>`);
@@ -806,6 +820,13 @@ document.addEventListener('click', async (ev) => {
         el.disabled = false;
         el.innerHTML = label;
       }
+    }
+    if (act === 'nk-save') {
+      const token = document.getElementById('nk-tmdb').value.trim();
+      if (!token) return toast('Paste the token first.');
+      state.core.saveSettings({ tmdbToken: token });
+      state.status = null;
+      return route();
     }
     if (act === 'watch-tv-wifi') return goToBridge('tv', { title: el.dataset.title });
     if (act === 'watch-tv') {
@@ -936,15 +957,21 @@ async function startApp() {
     const bridge = location.hash.startsWith('#/bridge?');
     const [core, ping] = await Promise.all([
       bridge ? null : bootCore(),
-      fetch('api/ping').then((r) => (r.ok ? r.json() : null)).catch(() => null)
+      NATIVE ? null : fetch('api/ping').then((r) => (r.ok ? r.json() : null)).catch(() => null)
     ]);
     state.core = core;
     state.pc = !!(ping && ping.pc);
     state.pcInfo = state.pc ? ping : null;
     if (state.pc && core) await adoptPc();
     if (core) resumeSync();
+    // The Android app: mention a newer build once a day.
+    if (NATIVE && core) appUpdate(false).then((u) => {
+      if (!u.newer || Date.now() - (core.settings().appUpdateToast || 0) < 864e5) return;
+      core.saveSettings({ appUpdateToast: Date.now() });
+      toast('An update to the app is ready. Settings › App has it.');
+    }).catch(() => {});
     // Offline support needs a secure address (the hosted app, or localhost); the PC's http address can't have it.
-    if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
+    if ('serviceWorker' in navigator && window.isSecureContext && !NATIVE) navigator.serviceWorker.register('sw.js').catch(() => {});
   } catch (e) {
     $view.innerHTML = errorHtml(e);
     return;

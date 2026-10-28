@@ -302,4 +302,4 @@ async function openBySearch(b) {
 function clearLog() { log.length = 0; return status(); }
 function clearCalibration() { setSetting('rokuCalibration', null); return status(); }
 
-module.exports = { status, setup, find, key, text, saveCalibration, openBySearch, tvState, clearLog, clearCalibration, calibration, inferGrid, gridPresses };
+module.exports = { status, setup, find, deviceInfo, key, text, saveCalibration, openBySearch, tvState, clearLog, clearCalibration, calibration, inferGrid, gridPresses };

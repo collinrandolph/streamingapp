@@ -2,7 +2,7 @@
 // App files: network first (so updates arrive), falling back to the stored copy offline.
 // sql.js and posters: stored copy first, since they don't change.
 // TMDb and Wikidata data aren't handled here; the app's data code caches those itself.
-const VERSION = 'v5';
+const VERSION = 'v6';
 const SHELL = `shell-${VERSION}`;
 const STATIC = 'static-v1';
 const POSTERS = 'posters-v1';

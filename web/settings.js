@@ -247,6 +247,24 @@ async function screenBridge() {
   }
 }
 
+// ---------- Android app updates ----------
+
+// Each push builds a new APK onto the "android" release (.github/workflows/android.yml), named "Android app build N".
+const APK_URL = 'https://github.com/collinrandolph/streamingapp/releases/download/android/StreamingTracker.apk';
+const APK_RELEASE = 'https://api.github.com/repos/collinrandolph/streamingapp/releases/tags/android';
+
+// This build and the newest published one. Checks at most once a day unless forced (the Settings screen).
+async function appUpdate(force) {
+  const build = await fetch('version.json').then((r) => r.json()).then((v) => v.build).catch(() => 0);
+  const last = state.core.settings().appUpdateCheck || {};
+  let latest = last.latest;
+  if (force || !last.at || Date.now() - last.at > 864e5) {
+    latest = await fetch(APK_RELEASE).then((r) => (r.ok ? r.json() : null)).then((rel) => rel && Number((rel.name.match(/build (\d+)/) || [])[1])).catch(() => null);
+    if (latest) state.core.saveSettings({ appUpdateCheck: { at: Date.now(), latest } });
+  }
+  return { build, latest: latest || null, newer: !!(latest && build && latest > build) };
+}
+
 // ---------- Settings screen ----------
 
 async function screenSettings(rid) {
@@ -280,7 +298,22 @@ async function screenSettings(rid) {
       </div>
       <p class="hint" style="margin:10px 0 0">A backup holds your services, My List, places in shows, follows and saved searches. Restoring replaces what's on this device.</p>
     </div></div>
+    ${NATIVE ? `<h2 class="sec" style="font-size:16px">App</h2>
+    <div class="pad"><div class="panel" style="padding:14px">
+      <p id="app-version" style="margin:0">Checking for updates…</p>
+      <a id="app-update" class="btn-primary" hidden style="margin-top:12px;display:flex;align-items:center;justify-content:center" href="${APK_URL}">Download the update</a>
+    </div></div>` : ''}
     <p class="attrib"><img class="tmdb-logo" src="tmdb-logo.svg" alt="TMDB" width="120" height="16"><br>This product uses the TMDB API but is not endorsed or certified by TMDB. Streaming availability data from JustWatch.</p>`;
+  if (NATIVE) {
+    appUpdate(true).then((u) => {
+      const el = document.getElementById('app-version');
+      if (!el || rid !== state.renderId) return;
+      el.textContent = !u.latest ? `Build ${u.build}. Couldn't check for updates.`
+        : u.newer ? `Build ${u.build}. Build ${u.latest} is available: download it, then open it to install over this one.`
+          : `Build ${u.build}, the latest.`;
+      document.getElementById('app-update').hidden = !u.newer;
+    });
+  }
   // Fill in each PC's online status from its relay channel.
   for (const p of pcList()) {
     if (!p.relay) continue;
@@ -378,10 +411,16 @@ document.addEventListener('click', async (ev) => {
     }
     if (act === 'set-export') {
       const data = await api('/export');
+      const name = 'streaming-tracker-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      if (NATIVE) {
+        // The Android web view can't download files, so the app writes it to Documents itself.
+        await Capacitor.nativePromise('Filesystem', 'writeFile', { path: name, data: JSON.stringify(data, null, 1), directory: 'DOCUMENTS', encoding: 'utf8' });
+        return toast('Saved to Documents › ' + name);
+      }
       const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'streaming-tracker-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+      a.download = name;
       document.body.appendChild(a);
       a.click();
       setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);

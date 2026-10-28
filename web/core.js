@@ -1,10 +1,13 @@
 'use strict';
 // Runs the app's data code (the same api.js, tmdb.js, tracking.js, good.js and wikidata.js the PC uses)
 // inside the browser, so the app works with the PC off. SQLite comes from sql.js; your data and the API
-// cache are kept on this device in IndexedDB. The Roku still goes through the PC (see web/app.js).
+// cache are kept on this device in IndexedDB. In the browser the Roku goes through the PC (see web/app.js);
+// in the Android app this page runs roku.js too and reaches the TV itself.
 
-const SQLJS = 'https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/';
-const CORE_MODULES = ['schema', 'tmdb', 'wikidata', 'tracking', 'good', 'api'];
+// The Android app (Capacitor) can make plain-http requests on the Wi-Fi, which a web page can't.
+const NATIVE = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
+const SQLJS = NATIVE ? 'vendor/sql.js/' : 'https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/';
+const CORE_MODULES = ['schema', 'tmdb', 'wikidata', 'tracking', 'good', 'api', ...(NATIVE ? ['roku'] : [])];
 const CACHE_MAX_AGE = 30 * 864e5; // API responses older than this are dropped at start-up
 const SETTINGS_KEY = 'trackerSettings';
 
@@ -129,6 +132,31 @@ const rokuShim = new Proxy({}, {
   get: () => () => { throw Object.assign(new Error('Watch on TV goes through your PC.'), { status: 409 }); }
 });
 
+// In the Android app: the slice of node's http that roku.js uses, sent through Capacitor's native HTTP.
+const nativeHttp = {
+  request(o, onResponse) {
+    const handlers = {};
+    let done = false;
+    const finish = (fn) => { if (!done) { done = true; fn(); } };
+    const req = {
+      on(ev, fn) { handlers[ev] = fn; return req; },
+      destroy(err) { finish(() => handlers.error && handlers.error(err)); },
+      end() {
+        setTimeout(() => { if (!done && handlers.timeout) handlers.timeout(); }, (o.timeout || 4000) + 500);
+        Capacitor.nativePromise('CapacitorHttp', 'request', {
+          url: `http://${o.host}:${o.port}${o.path}`, method: o.method, headers: {}, responseType: 'text',
+          connectTimeout: o.timeout || 4000, readTimeout: o.timeout || 4000
+        }).then((r) => finish(() => {
+          const body = typeof r.data === 'string' ? r.data : JSON.stringify(r.data ?? '');
+          const res = { statusCode: r.status, on(ev, fn) { if (ev === 'data') fn(body); if (ev === 'end') fn(); return res; } };
+          onResponse(res);
+        }), (e) => finish(() => handlers.error && handlers.error(new Error(e.message || 'no answer'))));
+      }
+    };
+    return req;
+  }
+};
+
 // ---------- Boot ----------
 
 async function bootCore() {
@@ -165,8 +193,17 @@ async function bootCore() {
     }
   };
   const src = Object.fromEntries(CORE_MODULES.map((m, i) => [m, sources[i]]));
-  const require = makeRequire(src, { db, config, roku: rokuShim });
+  const shims = NATIVE ? { db, config, http: nativeHttp, dgram: {} } : { db, config, roku: rokuShim };
+  const require = makeRequire(src, shims);
   require('schema').applySchema(db);
+  if (NATIVE) {
+    // The web view can't send UDP, so the Wi-Fi search for Rokus is done natively (RokuFindPlugin.java).
+    const roku = require('roku');
+    roku.find = async () => {
+      const r = await Capacitor.nativePromise('RokuFind', 'find', {});
+      return { found: await Promise.all((r.ips || []).map((ip) => roku.deviceInfo(ip).catch(() => ({ ip, name: 'Roku' })))) };
+    };
+  }
   const api = require('api');
 
   // Write pending changes before the page goes to the background or closes.
