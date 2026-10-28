@@ -27,6 +27,8 @@ async function profileCall(pc, op, payload = {}) {
   }
   if (!pc || !pc.relay) throw new Error('Scan this PC’s QR code again to use profiles.');
   const r = await relayRequest(pc, op === 'list' ? 'profiles' : 'profile-' + op, payload, 25000);
+  // Helpers older than 0.4.0 don't know about profiles.
+  if (r.error === 'Unknown request') throw new Error(`${pc.name} has an older PC helper. Download the latest one, close the old one and open the new one.`);
   if (!r.ok) throw Object.assign(new Error(r.error || 'The PC reported a problem.'), { status: r.status });
   return r;
 }

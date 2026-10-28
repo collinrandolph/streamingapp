@@ -7,7 +7,7 @@ const path = require('path');
 const db = require('./db');
 const { PACKAGED } = require('./config');
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const APP_URL = process.env.APP_URL || 'https://collinrandolph.github.io/streamingapp/';
 // Adapters a phone can't reach: virtual switches, VPN and Bluetooth links.
 const SKIP_ADAPTER = /vEthernet|VirtualBox|VMware|Hyper-V|WSL|Loopback|Bluetooth|Tailscale|ZeroTier|docker/i;
