@@ -99,7 +99,10 @@ function availability(watchProviders, mine) {
 // ---------- Helpers ----------
 
 const yearOf = (d) => (d ? d.slice(0, 4) : '');
-const today = () => new Date().toISOString().slice(0, 10);
+// Dates as YYYY-MM-DD on this device's clock, not UTC: in the US evening UTC is already tomorrow,
+// which dropped today's episodes out of Coming soon before they counted as aired.
+const localDate = (ms = Date.now()) => new Date(ms - new Date(ms).getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+const today = () => localDate();
 
 function summarize(item, kind) {
   const k = kind || item.media_type;
@@ -123,7 +126,12 @@ function withListFlags(items) {
 
 async function details(kind, id, ttl = DAY / 2) {
   if (kind === 'movie') return tmdb.get('/movie/' + id + '?append_to_response=credits,watch/providers,release_dates', ttl);
-  return tmdb.get('/tv/' + id + '?append_to_response=aggregate_credits,watch/providers,external_ids', ttl);
+  const path = '/tv/' + id + '?append_to_response=aggregate_credits,watch/providers,external_ids';
+  const d = await tmdb.get(path, ttl);
+  // The saved copy's next episode has come out since: check again (at most hourly) for the one after it.
+  const na = d.next_episode_to_air;
+  if (na && na.air_date && na.air_date <= today() && ttl > 3600) return tmdb.get(path, 3600);
+  return d;
 }
 
 // How often a title is re-checked depends on its state: shows you're watching twice a day,
@@ -143,8 +151,11 @@ function shortDate(iso) {
 }
 
 // Seasons with their aired-episode counts, from the show's details (season 0 = specials, skipped).
+// TMDb's next episode counts as aired from its air date, since TMDb can take a day to move it to last.
 function seasonsOf(tv) {
-  const last = tv.last_episode_to_air;
+  let last = tv.last_episode_to_air;
+  const na = tv.next_episode_to_air;
+  if (na && na.air_date && na.air_date <= today() && na.season_number > 0) last = na;
   return (tv.seasons || []).filter((s) => s.season_number > 0).map((s) => {
     let aired = 0;
     if (last) {
@@ -475,9 +486,9 @@ async function library(body) {
   if (body.through) {
     let th = body.through;
     if (th === 'all') {
-      const last = d.last_episode_to_air;
+      const last = [...seasons].reverse().find((x) => x.aired > 0);
       if (!last) throw Object.assign(new Error('No episodes have aired yet.'), { status: 400 });
-      th = { s: last.season_number, e: last.episode_number };
+      th = { s: last.n, e: last.aired };
     }
     const pos = nextPos(seasons, Number(th.s), Number(th.e));
     set('active', pos.s, pos.e);
@@ -536,7 +547,7 @@ async function watching() {
   const movies = [];
   const updates = [];
   const t = today();
-  const in10 = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10);
+  const in10 = localDate(Date.now() + 10 * 864e5);
   await Promise.all(rows.map(async (r) => {
     try {
       const d = await details(r.kind, r.tmdb_id, refreshFor(r));
@@ -549,7 +560,7 @@ async function watching() {
         if (r.status === 'finished') return;
         if (p.state === 'watching') shows.push({ ...base, next: 'S' + pos.s + 'E' + pos.e, unwatched: p.unwatched, added: r.added_at });
         const na = d.next_episode_to_air;
-        if (na && na.air_date && na.air_date >= t && na.air_date <= in10) {
+        if (na && na.air_date && na.air_date > t && na.air_date <= in10) {
           coming.push({ ...base, line: 'S' + na.season_number + 'E' + na.episode_number + ' · ' + shortDate(na.air_date), date: na.air_date });
         } else if (p.premiere) {
           // A new season you're waiting on: announced, or premiering more than 10 days out.
@@ -582,7 +593,7 @@ async function person(id, withAvail = false) {
   const all = [...((p.combined_credits && p.combined_credits.cast) || []), ...((p.combined_credits && p.combined_credits.crew) || [])];
   const seen = new Map();
   // New releases haven't collected votes yet, so recent titles need fewer to count.
-  const recent = new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10);
+  const recent = localDate(Date.now() - 120 * 864e5);
   for (const c of all) {
     if (c.media_type !== 'movie' && c.media_type !== 'tv') continue;
     const date = c.release_date || c.first_air_date || '';
@@ -627,7 +638,7 @@ async function collection(id, withAvail = false) {
 async function studio(id, withAvail = false) {
   const t = today();
   // Established titles need 20 votes; the last 120 days only need a couple, so new releases show up.
-  const recent = new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10);
+  const recent = localDate(Date.now() - 120 * 864e5);
   const [co, m, tv, mNew, tvNew] = await Promise.all([
     tmdb.get('/company/' + id, 7 * DAY),
     tmdb.get('/discover/movie?with_companies=' + id + '&sort_by=primary_release_date.desc&primary_release_date.lte=' + t + '&vote_count.gte=20', DAY),
