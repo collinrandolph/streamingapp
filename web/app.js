@@ -243,6 +243,12 @@ async function screenWatching(rid) {
     shows: (v) => !w.shows.length ? '<p class="empty">Nothing unwatched. Start a show and pick your episode on its page.</p>'
       : v === 'list' ? `<div class="pad">${w.shows.map((s) => rowCard(s, 'Next up · ' + s.next, `<span class="line" style="font-size:12px;color:var(--muted)">${unwatched(s)}</span>`)).join('')}</div>`
       : posters(w.shows, (s) => `Next up · ${s.next} · ${unwatched(s)}`, { noAdd: true }),
+    // Older seasons of shows watched in any order. A show can be here and in Shows at once.
+    back: (v) => {
+      const more = (s) => s.more ? ` · +${s.more} season${s.more === 1 ? '' : 's'}` : '';
+      return v === 'list' ? `<div class="pad">${w.back.map((s) => rowCard(s, 'Next up · ' + s.next + more(s))).join('')}</div>`
+        : posters(w.back, (s) => `Next up · ${s.next}${more(s)}`, { noAdd: true });
+    },
     movies: (v) => !w.movies.length ? '<p class="empty">No unwatched movies from My List are on your services.</p>'
       : v === 'list' ? `<div class="pad">${w.movies.map((m) => rowCard(m, m.year)).join('')}</div>`
       : posters(w.movies, (m) => m.year, { noAdd: true }),
@@ -264,6 +270,7 @@ async function screenWatching(rid) {
   };
   $view.innerHTML = header('Watching') + `
     ${secHead('Shows', 'shows')}${secBody('shows')}
+    ${w.back && w.back.length ? secHead('Catching up', 'back') + secBody('back') : ''}
     ${secHead('Movies', 'movies')}${secBody('movies')}
     ${secHead('Coming soon', 'coming', 'margin-bottom:4px')}
     <p class="hint" style="margin-top:0">Episodes of your started shows in the next 10 days</p>
@@ -286,7 +293,7 @@ async function loadUpdates(rid) {
 }
 
 // Watching sections show as a list or a poster carousel. The choice is remembered per section on this device.
-const VIEW_DEFAULTS = { shows: 'list', movies: 'carousel', coming: 'list', updates: 'list' };
+const VIEW_DEFAULTS = { shows: 'list', back: 'list', movies: 'carousel', coming: 'list', updates: 'list' };
 const VIEW_ICONS = {
   list: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
   carousel: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="7" height="14" rx="1.5"/><rect x="14" y="5" width="7" height="14" rx="1.5"/></svg>'
@@ -363,7 +370,7 @@ function statusActions(kind, status, pstate) {
   if (status === 'none') return { main: { op: 'start', label: 'Start watching' }, quiet: [remove] };
   if (status === 'finished') return { main: { op: 'rewatch', label: 'Rewatch' }, quiet: [remove] };
   if (pstate === 'caught') return { main: { op: 'rewatch', label: 'Rewatch' }, quiet: [pause, remove] };
-  if (pstate === 'waiting') return { main: null, quiet: [pause, remove] }; // nothing to mark until more episodes air
+  if (pstate === 'waiting' || pstate === 'back') return { main: null, quiet: [pause, remove] }; // nothing new to mark until more episodes air
   return { main: { op: 'allwatched', label: 'Mark all watched' }, quiet: [pause, remove] };
 }
 
@@ -475,14 +482,21 @@ async function screenTitle(rid, kind, id) {
   let nextHtml = '';
   if (isTv) {
     const n = t.next;
+    // An any-order show's main line follows new episodes; the seasons you're going back through get their own line.
+    const p = t.anyOrder ? t.live : t.progress;
     const line = status === 'paused' ? `Paused at S${n.s}E${n.e}`
-      : status === 'active' || status === 'finished' ? `${t.progress.label} · ${t.progress.line}`
+      : status === 'active' || status === 'finished' ? `${p.label} · ${p.line}`
+      : t.anyOrder ? 'Tap the episodes you\'ve watched.'
       : `${n.unwatched} episodes aired. Start watching, or tap the episode you're up to.`;
+    const back = t.anyOrder && t.back.length ? `Catching up · ${t.back.map((b) => `S${b.s}E${b.e}`).join(', ')}` : '';
+    const started = new Set(t.started);
     nextHtml = `<h2 class="sec" style="font-size:16px;margin-bottom:4px">Episodes</h2>
       <p class="hint" style="margin-top:0;font-size:14px;color:var(--text-2)">${esc(line)}</p>
-      <div class="chips" id="season-chips">${t.seasons.map((s) => `<button class="chip" data-act="season" data-n="${s.n}" aria-pressed="false">Season ${s.n}</button>`).join('')}</div>
-      <p class="hint" style="margin-top:10px">Tap an episode to mark it and everything before it watched. Tap a watched one to un-mark it and everything after.</p>
-      <div class="pad"><div class="panel" id="episodes"><p class="loading" style="margin:14px">Loading episodes…</p></div></div>`;
+      ${back ? `<p class="hint" style="margin-top:-6px;font-size:14px;color:var(--text-2)">${esc(back)}</p>` : ''}
+      <div class="chips" id="season-chips">${t.seasons.map((s) => `<button class="chip ${started.has(s.n) ? 'started' : ''}" data-act="season" data-n="${s.n}" aria-pressed="false">Season ${s.n}</button>`).join('')}</div>
+      <p class="hint" style="margin-top:10px">${t.anyOrder ? 'Tap an episode to check or uncheck just that one.' : 'Tap an episode to mark it and everything before it watched. Tap a watched one to un-mark it and everything after.'}</p>
+      <div class="pad"><div class="panel" id="episodes"><p class="loading" style="margin:14px">Loading episodes…</p></div></div>
+      <div class="pad" style="margin-top:12px"><div class="panel"><button class="item" data-act="any-order" role="switch" aria-checked="${t.anyOrder}"><span class="l"><span class="t">Watch in any order</span><span class="s">${t.anyOrder ? 'New episodes follow the furthest one you\'ve checked' : 'Check episodes one at a time, for going back to old seasons'}</span></span><span class="sw" aria-checked="${t.anyOrder}"></span></button></div></div>`;
   }
 
   // Title, details and services sit on the header image; episodes come straight after the buttons.
@@ -524,7 +538,9 @@ async function screenTitle(rid, kind, id) {
     });
   }
   if (isTv && t.seasons.length) {
-    const start = t.seasons.find((s) => s.n === t.next.s) ? t.next.s : t.seasons[0].n;
+    // Any order: open on the season you're catching up on, if there's nothing new to watch.
+    const want = t.anyOrder && t.back.length && t.live.state !== 'watching' ? t.back[0].s : t.next.s;
+    const start = t.seasons.find((s) => s.n === want) ? want : t.seasons[0].n;
     loadSeason(rid, start);
   }
 }
@@ -542,13 +558,19 @@ async function loadSeason(rid, n) {
     const s = await api('/title/tv/' + t.id + '/season/' + n);
     if (rid !== state.renderId) return;
     const nx = t.next;
+    const live = t.anyOrder && t.live.state === 'watching' ? nx : null;
+    const marks = new Map((t.marks || []).map((m) => [m.s + ':' + m.e, m]));
     box.innerHTML = s.episodes.map((ep) => {
-      const before = n < nx.s || (n === nx.s && ep.e < nx.e);
-      const isNext = n === nx.s && ep.e === nx.e;
+      const mark = marks.get(n + ':' + ep.e);
+      const before = t.anyOrder ? !!mark : n < nx.s || (n === nx.s && ep.e < nx.e);
+      const isNext = t.anyOrder
+        ? (live && n === live.s && ep.e === live.e) || t.back.some((b) => b.s === n && b.e === ep.e)
+        : n === nx.s && ep.e === nx.e;
       let cls = '', sub, glyph = '';
       if (!ep.aired) sub = ep.date ? 'Airs ' + ep.date : 'Date TBA';
+      else if (before && mark && mark.assumed) { cls = 'watched assumed'; sub = 'Counted as watched'; glyph = '✓'; }
       else if (before) { cls = 'watched'; sub = 'Watched'; glyph = '✓'; }
-      else if (isNext) { cls = 'next'; sub = 'Next up'; }
+      else if (isNext) { cls = 'next'; sub = live && n === live.s && ep.e === live.e ? 'Next up' : 'Next up · catching up'; }
       else sub = 'Unwatched';
       return `<button class="ep ${cls}" data-act="mark-ep" data-s="${n}" data-e="${ep.e}" data-watched="${before}" ${ep.aired ? '' : 'disabled'}>
         <span class="dot">${glyph}</span><span class="l" style="display:flex;flex-direction:column;gap:2px;min-width:0"><span class="t" style="font-size:14px;font-weight:600">${ep.e}. ${esc(ep.name || 'Episode ' + ep.e)}</span><span class="s" style="font-size:12px;color:var(--muted)">${esc(sub)}</span></span></button>`;
@@ -890,7 +912,7 @@ document.addEventListener('click', async (ev) => {
       let msg = `${d.name}: ${MSG[d.op]}`;
       if (res.autoFinished) msg = `${d.name} is finished. Moved to Finished.`;
       else if (d.op === 'allwatched' && res.progress) msg += `. ${res.progress.label} · ${res.progress.line}`;
-      toast(msg, d.op === 'add' ? null : undo);
+      toast(msg, d.op === 'add' || res.noUndo ? null : undo);
       return route();
     }
 
@@ -900,6 +922,15 @@ document.addEventListener('click', async (ev) => {
       const t = state.title;
       const base = { kind: t.kind, id: t.id, name: t.name, poster: t.poster, year: t.year };
       const s = Number(el.dataset.s), e = Number(el.dataset.e);
+      if (t.anyOrder) {
+        // Just this episode; Undo taps it again.
+        const toggle = () => api('/library', { ...base, op: 'mark', s, e });
+        const res = await toggle();
+        let msg = `${res.checked ? 'Checked' : 'Unchecked'} S${s}E${e}`;
+        if (res.autoFinished) msg = `${t.name} is finished. Moved to Finished.`;
+        toast(msg, async () => { await toggle(); route(); });
+        return route();
+      }
       const res = el.dataset.watched === 'true'
         ? await api('/library', { ...base, status: 'active', s, e })
         : await api('/library', { ...base, through: { s, e } });
@@ -913,6 +944,37 @@ document.addEventListener('click', async (ev) => {
       else if (res.progress && res.progress.state !== 'watching') msg += '. ' + res.progress.line;
       toast(msg, undo);
       return route();
+    }
+
+    if (act === 'any-order' || act === 'any-order-set') {
+      const t = state.title;
+      const base = { kind: t.kind, id: t.id, name: t.name, poster: t.poster, year: t.year };
+      const set = async (body, msg) => {
+        if (!t.entry) await api('/library', { ...base, op: 'add' });
+        await api('/library', { ...base, op: 'any-order', ...body });
+        closeSheet();
+        toast(`${t.name}: ${msg}`);
+        return route();
+      };
+      if (act === 'any-order-set') {
+        const d = el.dataset;
+        if (d.on === '0') return set({ on: false }, 'back to one place');
+        return set({ on: true, keep: d.keep === '1' }, d.keep === '1' ? 'any order, progress kept' : 'any order, progress cleared');
+      }
+      const started = t.entry && t.entry.status !== 'none';
+      if (!t.anyOrder) {
+        if (!started || (t.next.s === t.seasons[0]?.n && t.next.e === 1)) return set({ on: true }, 'any order');
+        return openSheet(`<h2>Watch ${esc(t.name)} in any order?</h2>
+          <p>You're up to S${t.next.s}E${t.next.e}. Keep everything before it as watched, or clear your progress and check episodes yourself.</p>
+          <div class="stack"><button class="btn-primary" data-act="any-order-set" data-on="1" data-keep="1">Keep my progress</button>
+          <button class="btn-secondary" data-act="any-order-set" data-on="1" data-keep="0">Clear progress</button></div>`);
+      }
+      // Back to one place: the episode after the one checked most recently.
+      const latest = (t.marks || []).reduce((l, m) => (!l || m.at > l.at || (m.at === l.at && (m.s > l.s || (m.s === l.s && m.e > l.e))) ? m : l), null);
+      if (!latest) return set({ on: false }, 'back to one place');
+      return openSheet(`<h2>Watch ${esc(t.name)} in order?</h2>
+        <p>Your place goes after S${latest.s}E${latest.e}, the episode you checked most recently, and everything before it counts as watched. Your individual checks are dropped.</p>
+        <div class="stack"><button class="btn-primary" data-act="any-order-set" data-on="0">Watch in order</button></div>`);
     }
 
     if (act === 'undo') {

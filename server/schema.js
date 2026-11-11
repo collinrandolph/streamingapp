@@ -29,6 +29,16 @@ const SCHEMA = `
     key TEXT PRIMARY KEY,
     value TEXT
   );
+  -- Episodes checked on a show watched in any order (library.any_order). assumed = counted as watched
+  -- when you switched the show over, rather than tapped.
+  CREATE TABLE IF NOT EXISTS episode_mark (
+    tmdb_id INTEGER NOT NULL,
+    s INTEGER NOT NULL,
+    e INTEGER NOT NULL,
+    at INTEGER NOT NULL,
+    assumed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tmdb_id, s, e)
+  );
   -- Titles you track, and the rules (people, franchise, studio) each one feeds into Updates.
   CREATE TABLE IF NOT EXISTS tracked_title (
     kind TEXT NOT NULL,
@@ -78,8 +88,9 @@ const SCHEMA = `
 
 function applySchema(db) {
   db.exec(SCHEMA);
-  // Columns added after the first release. pstate = where a started show stands (watching, waiting, caught, done).
-  for (const col of ['pstate TEXT']) {
+  // Columns added after the first release. pstate = where a started show stands (watching, waiting, caught, back, done);
+  // any_order = the show keeps a check per episode instead of one place.
+  for (const col of ['pstate TEXT', 'any_order INTEGER NOT NULL DEFAULT 0']) {
     try { db.exec('ALTER TABLE library ADD COLUMN ' + col); } catch (e) { /* already there */ }
   }
 }

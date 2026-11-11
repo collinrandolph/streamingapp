@@ -235,6 +235,63 @@ function setPstate(r, p) {
   if (r.pstate !== p.state) db.prepare('UPDATE library SET pstate = ? WHERE kind = ? AND tmdb_id = ?').run(p.state, r.kind, r.tmdb_id);
 }
 
+// ---------- Shows watched in any order ----------
+// A check per episode instead of one place, and two tracks worked out from the checks:
+//   live: the episode after the furthest one checked. New episodes, Watching and Coming soon follow it,
+//     so going back to old seasons never makes the show look behind.
+//   back catalogue: each older season you've started. Its next episode is the first unchecked one after your
+//     latest check in that season; a finished season stays finished until you check something in another.
+const marksOf = (id) => db.prepare('SELECT s, e, at, assumed FROM episode_mark WHERE tmdb_id = ? ORDER BY s, e').all(Number(id)).map((m) => ({ ...m }));
+const isBefore = (a, b) => a.s < b.s || (a.s === b.s && a.e < b.e);
+const furthestOf = (marks) => marks.reduce((f, m) => (!f || isBefore(f, m) ? m : f), null);
+// The latest check by time (the furthest, among checks made together).
+const latestOf = (marks) => marks.reduce((l, m) => (!l || m.at > l.at || (m.at === l.at && isBefore(l, m)) ? m : l), null);
+
+function backCatalogue(seasons, marks) {
+  const far = furthestOf(marks);
+  if (!far) return [];
+  const has = new Set(marks.map((m) => m.s + ':' + m.e));
+  const out = [];
+  for (const se of seasons) {
+    const latest = latestOf(marks.filter((m) => m.s === se.n));
+    if (!latest) continue;
+    for (let e = latest.e + 1; e <= se.aired && isBefore({ s: se.n, e }, far); e++) {
+      if (!has.has(se.n + ':' + e)) { out.push({ s: se.n, e, at: latest.at }); break; }
+    }
+  }
+  return out.sort((a, b) => b.at - a.at).map(({ s, e }) => ({ s, e }));
+}
+
+// Where a show stands, for either kind of show. live is the progress of the next new episode; p is the same,
+// except that an any-order show with back catalogue left counts as Catching up rather than Caught up or Finished.
+function standing(r, d) {
+  const seasons = seasonsOf(d);
+  if (!r || !r.any_order) {
+    const pos = normalizePos(seasons, r ? r.next_s : 1, r ? r.next_e : 1);
+    const live = progressOf(d, pos.s, pos.e);
+    return { seasons, pos, live, p: live, back: [], marks: null };
+  }
+  const marks = marksOf(r.tmdb_id);
+  const far = furthestOf(marks);
+  let pos = { s: seasons.length ? seasons[0].n : 1, e: 1 };
+  if (far) {
+    const n = nextPos(seasons, far.s, far.e);
+    pos = normalizePos(seasons, n.s, n.e);
+  }
+  const live = progressOf(d, pos.s, pos.e);
+  const back = backCatalogue(seasons, marks);
+  let p = live;
+  if (back.length && (live.state === 'caught' || live.state === 'done')) {
+    const more = back.length - 1;
+    p = { state: 'back', label: 'Catching up', line: 'S' + back[0].s + 'E' + back[0].e + ' next' + (more ? ' · ' + more + ' more season' + (more === 1 ? '' : 's') + ' started' : '') };
+  }
+  if (r.next_s !== pos.s || r.next_e !== pos.e) {
+    db.prepare('UPDATE library SET next_s = ?, next_e = ? WHERE kind = ? AND tmdb_id = ?').run(pos.s, pos.e, r.kind, r.tmdb_id);
+    r.next_s = pos.s; r.next_e = pos.e;
+  }
+  return { seasons, pos, live, p, back, marks };
+}
+
 function theatrical(movie) {
   const r = (movie.release_dates && movie.release_dates.results || []).find((x) => x.iso_3166_1 === REGION());
   if (!r) return null;
@@ -429,12 +486,21 @@ async function title(kind, id) {
     trailer: trailerOf(videos)
   };
   if (isTv) {
-    const seasons = seasonsOf(d);
-    const { s, e } = normalizePos(seasons, entry ? entry.next_s : 1, entry ? entry.next_e : 1);
+    const st = standing(entry, d);
+    const { seasons } = st;
+    const { s, e } = st.pos;
     out.seasons = seasons;
     out.ended = d.status === 'Ended' || d.status === 'Canceled';
     out.next = { s, e, aired: isAired(seasons, s, e), unwatched: unwatchedFrom(seasons, s, e) };
-    out.progress = progressOf(d, s, e);
+    out.progress = st.p;
+    out.live = st.live;
+    out.anyOrder = !!(entry && entry.any_order);
+    out.back = st.back;
+    out.marks = st.marks ? st.marks.map((m) => ({ s: m.s, e: m.e, at: m.at, assumed: !!m.assumed })) : null;
+    // Seasons you've started or finished, highlighted on the title page.
+    out.started = !entry || entry.status === 'none' ? []
+      : st.marks ? [...new Set(st.marks.map((m) => m.s))]
+      : seasons.filter((x) => x.n < s || (x.n === s && e > 1)).map((x) => x.n);
     if (entry && entry.status === 'active') setPstate(entry, out.progress);
   }
   return out;
@@ -456,6 +522,7 @@ async function library(body) {
   const cur = libEntry(kind, id);
   if (body.op === 'remove') {
     db.prepare('DELETE FROM library WHERE kind = ? AND tmdb_id = ?').run(kind, id);
+    if (kind === 'tv') db.prepare('DELETE FROM episode_mark WHERE tmdb_id = ?').run(id);
     return { entry: null };
   }
   const prev = cur ? { status: cur.status, s: cur.next_s, e: cur.next_e } : null;
@@ -472,16 +539,68 @@ async function library(body) {
   if (op === 'start') set('active', 1, 1);
   else if (op === 'pause') set('paused');
   else if (op === 'resume') set(kind === 'tv' ? 'active' : 'none');
-  else if (op === 'rewatch') { if (kind === 'tv') set('active', 1, 1); else set('none'); }
+  else if (op === 'rewatch') {
+    if (kind === 'tv') { set('active', 1, 1); db.prepare('DELETE FROM episode_mark WHERE tmdb_id = ?').run(id); } else set('none');
+  }
   else if (op === 'watched') set('finished');
   else if (body.status) set(body.status, body.s, body.e); // restoring a previous state (Undo)
   else if (body.s && body.e) set('active', body.s, body.e); // un-marking episodes back to this one
 
   const startsShow = op === 'start' || op === 'resume' || op === 'rewatch' || body.through || body.s || body.status === 'active';
-  if (kind !== 'tv' || !startsShow) return { entry: libEntry(kind, id), prev };
+  const anyOrderOp = op === 'mark' || op === 'any-order';
+  if (kind !== 'tv' || (!startsShow && !anyOrderOp)) return { entry: libEntry(kind, id), prev };
 
   const d = await details('tv', id);
   const seasons = seasonsOf(d);
+  if (op === 'mark') {
+    // Any order: check or uncheck just this episode.
+    const s = Number(body.s), e = Number(body.e);
+    const had = db.prepare('SELECT 1 FROM episode_mark WHERE tmdb_id = ? AND s = ? AND e = ?').get(id, s, e);
+    if (had) db.prepare('DELETE FROM episode_mark WHERE tmdb_id = ? AND s = ? AND e = ?').run(id, s, e);
+    else db.prepare('INSERT INTO episode_mark (tmdb_id, s, e, at, assumed) VALUES (?, ?, ?, ?, 0)').run(id, s, e, Date.now());
+    if (libEntry(kind, id).status !== 'active') set('active');
+    const r = libEntry(kind, id);
+    const st = standing(r, d);
+    reconcile(r, st.p);
+    return { entry: libEntry(kind, id), progress: st.p, checked: !had, autoFinished: r.status === 'finished', prev };
+  }
+  if (op === 'any-order') {
+    const r = libEntry(kind, id);
+    const marks = marksOf(id);
+    db.prepare('DELETE FROM episode_mark WHERE tmdb_id = ?').run(id);
+    if (body.on) {
+      // Keeping your progress counts everything before your place as watched (shown fainter than episodes you tap).
+      const started = r.status !== 'none';
+      if (body.keep && started) {
+        const now = Date.now();
+        const add = db.prepare('INSERT INTO episode_mark (tmdb_id, s, e, at, assumed) VALUES (?, ?, ?, ?, 1)');
+        for (const se of seasons) {
+          for (let e = 1; e <= se.count && isBefore({ s: se.n, e }, { s: r.next_s, e: r.next_e }); e++) add.run(id, se.n, e, now);
+        }
+      }
+      db.prepare('UPDATE library SET any_order = 1 WHERE kind = ? AND tmdb_id = ?').run(kind, id);
+    } else {
+      // Back to one place: the episode after the one checked most recently. Everything before it counts as watched.
+      const latest = latestOf(marks);
+      const pos = latest ? nextPos(seasons, latest.s, latest.e) : { s: 1, e: 1 };
+      db.prepare('UPDATE library SET any_order = 0, next_s = ?, next_e = ? WHERE kind = ? AND tmdb_id = ?').run(pos.s, pos.e, kind, id);
+    }
+    const r2 = libEntry(kind, id);
+    const st = standing(r2, d);
+    if (r2.status === 'active') reconcile(r2, st.p);
+    return { entry: libEntry(kind, id), progress: st.p, prev };
+  }
+  // Any order, every aired one: check them all. (A single place, and its Undo, don't apply.)
+  if (body.through === 'all' && libEntry(kind, id).any_order) {
+    const now = Date.now();
+    const add = db.prepare('INSERT OR IGNORE INTO episode_mark (tmdb_id, s, e, at, assumed) VALUES (?, ?, ?, ?, 0)');
+    for (const se of seasons) for (let e = 1; e <= se.aired; e++) add.run(id, se.n, e, now);
+    set('active');
+    const r = libEntry(kind, id);
+    const st = standing(r, d);
+    reconcile(r, st.p);
+    return { entry: libEntry(kind, id), progress: st.p, autoFinished: r.status === 'finished', prev: null, noUndo: true };
+  }
   // Watched through an episode (or every aired one): Next up becomes the episode after it.
   if (body.through) {
     let th = body.through;
@@ -494,8 +613,7 @@ async function library(body) {
     set('active', pos.s, pos.e);
   }
   const r = libEntry(kind, id);
-  const pos = normalizePos(seasons, r.next_s, r.next_e);
-  const p = progressOf(d, pos.s, pos.e);
+  const { p } = standing(r, d);
   reconcile(r, p);
   return { entry: libEntry(kind, id), progress: p, autoFinished: r.status === 'finished', prev };
 }
@@ -506,8 +624,7 @@ async function myList() {
   await Promise.all(rows.filter((r) => r.kind === 'tv' && r.status === 'active').map(async (r) => {
     try {
       const d = await details('tv', r.tmdb_id, refreshFor(r));
-      const pos = normalizePos(seasonsOf(d), r.next_s, r.next_e);
-      const p = progressOf(d, pos.s, pos.e);
+      const { p } = standing(r, d);
       reconcile(r, p);
       progress.set(r.tmdb_id, p);
     } catch (e) { /* no line this time */ }
@@ -544,6 +661,7 @@ async function watching() {
   const rows = db.prepare("SELECT * FROM library WHERE status = 'active' OR (kind = 'movie' AND status = 'none') OR (kind = 'tv' AND status = 'finished' AND pstate = 'done') ORDER BY added_at DESC").all();
   const shows = [];
   const coming = [];
+  const back = [];
   const movies = [];
   const updates = [];
   const t = today();
@@ -554,11 +672,12 @@ async function watching() {
       const a = availability(d['watch/providers'], mine);
       const base = { kind: r.kind, id: r.tmdb_id, name: r.name, poster: r.poster, year: r.year, badge: a.badges[0], faded: a.tier !== 'yours' };
       if (r.kind === 'tv' && (r.status === 'active' || r.status === 'finished')) {
-        const pos = normalizePos(seasonsOf(d), r.next_s, r.next_e);
-        const p = progressOf(d, pos.s, pos.e);
-        reconcile(r, p);
+        const st = standing(r, d);
+        const { pos, live: p } = st;
+        reconcile(r, st.p);
         if (r.status === 'finished') return;
         if (p.state === 'watching') shows.push({ ...base, next: 'S' + pos.s + 'E' + pos.e, unwatched: p.unwatched, added: r.added_at });
+        if (st.back.length) back.push({ ...base, next: 'S' + st.back[0].s + 'E' + st.back[0].e, more: st.back.length - 1, added: r.added_at });
         const na = d.next_episode_to_air;
         if (na && na.air_date && na.air_date > t && na.air_date <= in10) {
           coming.push({ ...base, line: 'S' + na.season_number + 'E' + na.episode_number + ' · ' + shortDate(na.air_date), date: na.air_date });
@@ -574,10 +693,11 @@ async function watching() {
     }
   }));
   shows.sort((x, y) => y.added - x.added);
+  back.sort((x, y) => y.added - x.added);
   movies.sort((x, y) => y.added - x.added);
   coming.sort((x, y) => x.date.localeCompare(y.date));
   updates.sort((x, y) => x.date.localeCompare(y.date));
-  return { shows, movies, coming, updates };
+  return { shows, back, movies, coming, updates };
 }
 
 // Top-line jobs shown on person pages; everything else (Thanks, Producer, crew roles) is left out.
@@ -668,7 +788,7 @@ const roku = require('./roku');
 // ---------- Backup ----------
 // Your data, not the API cache: for backups, and for moving it between the PC and the phone.
 // Roku settings and calibration stay with the PC, which is the one that talks to the TV.
-const BACKUP_TABLES = ['services', 'library', 'tracked_title', 'track_rule', 'follow', 'update_seen', 'good_profile'];
+const BACKUP_TABLES = ['services', 'library', 'episode_mark', 'tracked_title', 'track_rule', 'follow', 'update_seen', 'good_profile'];
 const BACKUP_SETTINGS = ['good'];
 
 function exportData() {
@@ -687,8 +807,9 @@ function importData(b) {
       const rows = b.tables[t];
       if (!Array.isArray(rows)) continue;
       db.exec('DELETE FROM ' + t);
+      const known = new Set(db.prepare('PRAGMA table_info(' + t + ')').all().map((c) => c.name));
       for (const row of rows) {
-        const cols = Object.keys(row).filter((c) => /^[a-z_]+$/.test(c));
+        const cols = Object.keys(row).filter((c) => /^[a-z_]+$/.test(c) && known.has(c));
         db.prepare(`INSERT INTO ${t} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...cols.map((c) => row[c]));
       }
     }
