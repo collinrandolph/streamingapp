@@ -539,7 +539,10 @@ async function screenTitle(rid, kind, id) {
   }
   if (isTv && t.seasons.length) {
     // Any order: open on the season you're catching up on, if there's nothing new to watch.
-    const want = t.anyOrder && t.back.length && t.live.state !== 'watching' ? t.back[0].s : t.next.s;
+    // After tapping an episode, stay on the season you were looking at.
+    const keep = state.keepSeason && state.keepSeason.id === t.id ? state.keepSeason.n : null;
+    state.keepSeason = null;
+    const want = keep || (t.anyOrder && t.back.length && t.live.state !== 'watching' ? t.back[0].s : t.next.s);
     const start = t.seasons.find((s) => s.n === want) ? want : t.seasons[0].n;
     loadSeason(rid, start);
   }
@@ -922,14 +925,15 @@ document.addEventListener('click', async (ev) => {
       const t = state.title;
       const base = { kind: t.kind, id: t.id, name: t.name, poster: t.poster, year: t.year };
       const s = Number(el.dataset.s), e = Number(el.dataset.e);
+      const redraw = () => { state.keepSeason = { id: t.id, n: s }; return route(); };
       if (t.anyOrder) {
         // Just this episode; Undo taps it again.
         const toggle = () => api('/library', { ...base, op: 'mark', s, e });
         const res = await toggle();
         let msg = `${res.checked ? 'Checked' : 'Unchecked'} S${s}E${e}`;
         if (res.autoFinished) msg = `${t.name} is finished. Moved to Finished.`;
-        toast(msg, async () => { await toggle(); route(); });
-        return route();
+        toast(msg, async () => { await toggle(); redraw(); });
+        return redraw();
       }
       const res = el.dataset.watched === 'true'
         ? await api('/library', { ...base, status: 'active', s, e })
@@ -937,13 +941,13 @@ document.addEventListener('click', async (ev) => {
       const prev = res.prev;
       const undo = async () => {
         await api('/library', prev ? { ...base, status: prev.status, s: prev.s, e: prev.e } : { ...base, op: 'remove' });
-        route();
+        redraw();
       };
       let msg = el.dataset.watched === 'true' ? `Un-marked from S${s}E${e} on` : `Watched through S${s}E${e}`;
       if (res.autoFinished) msg = `${t.name} is finished. Moved to Finished.`;
       else if (res.progress && res.progress.state !== 'watching') msg += '. ' + res.progress.line;
       toast(msg, undo);
-      return route();
+      return redraw();
     }
 
     if (act === 'any-order' || act === 'any-order-set') {
